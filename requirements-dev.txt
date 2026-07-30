@@ -1,0 +1,4 @@
+# Dépendances de développement, inutiles en production.
+# L'hébergeur n'installe que requirements.txt : le démarrage est plus rapide.
+-r requirements.txt
+pytest>=8.0

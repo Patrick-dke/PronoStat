@@ -380,15 +380,43 @@ coefficient honnêtement calibré n'existe pour elles. Fabriquer un « pluie =
 
 ### Streamlit Community Cloud
 
-1. Poussez le dossier sur GitHub. **Vérifiez que `.env` et
-   `.streamlit/secrets.toml` ne sont pas commités** — déjà exclus par
-   `.gitignore`.
-2. Sur [share.streamlit.io](https://share.streamlit.io), créez une application
-   pointant sur `app.py`. Vous obtenez une **URL publique**.
-3. **Settings → Secrets** : collez le contenu de
-   `.streamlit/secrets.toml.example`, complété avec vos clés.
-4. Ajoutez `PRONOSTAT_ENV = "production"` dans les secrets.
-5. La version de Python est fixée par `runtime.txt` (3.12).
+Gratuit, sans carte bancaire. **Le dépôt local est déjà initialisé et commité**
+(`.env` et `.streamlit/secrets.toml` exclus, vérifié).
+
+**1. Mettre votre identité sur les commits** (ils portent une valeur générique) :
+
+```bash
+git config user.name "Votre Nom" && git config user.email "vous@exemple.com" && git commit --amend --reset-author --no-edit
+```
+
+**2. Publier sur GitHub.** Créez un dépôt vide sur
+[github.com/new](https://github.com/new) — nommez-le `pronostat`, sans README
+ni .gitignore — puis :
+
+```bash
+git remote add origin https://github.com/VOTRE-COMPTE/pronostat.git
+```
+
+```bash
+git push -u origin main
+```
+
+Git demandera vos identifiants. Comme mot de passe, utilisez un **jeton d'accès
+personnel** ([github.com/settings/tokens](https://github.com/settings/tokens),
+portée `repo`) : GitHub n'accepte plus les mots de passe de compte.
+
+**3. Déployer.** Sur [share.streamlit.io](https://share.streamlit.io),
+connectez-vous avec GitHub → **New app** → dépôt `pronostat`, branche `main`,
+fichier `app.py`, Python **3.12**. Vous obtenez une URL en `.streamlit.app`,
+utilisable depuis n'importe quel appareil.
+
+**4. Ajouter les clés.** **Settings → Secrets** : collez le contenu de
+`.streamlit/secrets.toml.example` complété, plus
+`PRONOSTAT_ENV = "production"`. Aucun redéploiement nécessaire.
+
+> `requirements.txt` ne contient que le nécessaire à l'exécution ;
+> `requirements-dev.txt` ajoute `pytest` pour le développement local. Le
+> démarrage en ligne n'en est que plus rapide.
 
 ### Développement et production
 

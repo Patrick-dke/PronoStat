@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PronoStat</title>
+  <style>
+    :root { color-scheme: dark; }
+    body {
+      margin: 0; min-height: 100vh; display: grid; place-items: center;
+      background: radial-gradient(900px 460px at 50% 0%, #16202C, #0B0F14);
+      color: #E8EDF4; font-family: system-ui, -apple-system, sans-serif;
+      text-align: center; padding: 1.5rem;
+    }
+    h1 { font-size: 2rem; letter-spacing: -.03em; margin: 0 0 .4rem; }
+    h1 span { color: #D9B45B; }
+    p { color: #8A97A8; max-width: 34rem; line-height: 1.6; }
+    code {
+      background: #141B24; border: 1px solid #222D3B; border-radius: 8px;
+      padding: .15rem .45rem; font-size: .9em;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Prono<span>Stat</span></h1>
+    <p>
+      Le service d'analyse n'a pas répondu. Il démarre peut-être à froid&nbsp;:
+      réessayez dans quelques secondes.
+    </p>
+    <p>
+      Si le problème persiste, vérifiez que le service Cloud Run
+      <code>pronostat</code> est déployé dans la région déclarée par
+      <code>firebase.json</code>.
+    </p>
+  </main>
+</body>
+</html>

@@ -1,0 +1,21 @@
+# Secrets — ne jamais publier
+.env
+.streamlit/secrets.toml
+
+# Cache local (cotes, forme, effectifs, quotas, historique)
+.cache/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+*.egg-info/
+
+# Éditeurs / OS
+.vscode/
+.idea/
+.claude/settings.local.json
+.DS_Store
+Thumbs.db

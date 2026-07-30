@@ -1,0 +1,17 @@
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.cache/
+.git/
+.gitignore
+.env
+.streamlit/secrets.toml
+tests/
+public/
+firebase.json
+.firebaserc
+README.md
+Dockerfile
+.dockerignore

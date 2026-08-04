@@ -880,15 +880,29 @@ class HttpClient:
             self.last_error = f"quota_exhausted:{provider}"
             return None
 
-        try:
-            resp = self.session.get(
-                url, params=params, headers=headers,
-                timeout=timeout or cfg.HTTP_TIMEOUT,
-            )
-        except requests.RequestException as exc:
-            self.last_error = f"network:{type(exc).__name__}"
-            stale = self.cache.get_stale(key)
-            return (stale[0], stale[1], True) if stale else None
+        # Une coupure réseau passagère ne doit pas coûter les cotes du match.
+        # Sans reprise, un seul ConnectionError suffisait à faire chuter la
+        # confiance de l'analyse — constaté en conditions réelles. Les essais
+        # supplémentaires ne consomment aucun crédit : une requête qui n'a pas
+        # abouti n'est pas comptée par le fournisseur.
+        resp = None
+        for essai in range(cfg.HTTP_RETRIES + 1):
+            try:
+                resp = self.session.get(
+                    url, params=params, headers=headers,
+                    timeout=timeout or cfg.HTTP_TIMEOUT,
+                )
+                break
+            except requests.RequestException as exc:
+                self.last_error = f"network:{type(exc).__name__}"
+                if essai == cfg.HTTP_RETRIES:
+                    stale = self.cache.get_stale(key)
+                    return (stale[0], stale[1], True) if stale else None
+                # Attente croissante : une panne brève se résorbe souvent en
+                # moins d'une seconde, inutile de patienter davantage.
+                time.sleep(cfg.HTTP_RETRY_DELAY * (essai + 1))
+        if resp is None:  # pragma: no cover - garde-fou, la boucle sort avant
+            return None
 
         if provider:
             self._sync_quota(provider, resp, cost)

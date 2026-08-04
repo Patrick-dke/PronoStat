@@ -545,6 +545,12 @@ class Ttl:
 TTL = Ttl()
 
 HTTP_TIMEOUT = _env_float("HTTP_TIMEOUT", 12.0)
+# Reprises après une erreur réseau. Une coupure passagère suffisait à faire
+# perdre les cotes d'un match, et donc à effondrer la confiance de l'analyse.
+# Une requête qui n'aboutit pas n'est pas facturée : ces essais ne coûtent
+# aucun crédit d'API.
+HTTP_RETRIES = _env_int("HTTP_RETRIES", 2)
+HTTP_RETRY_DELAY = _env_float("HTTP_RETRY_DELAY", 0.6)
 # Le service SPARQL public de Wikidata est plus lent qu'une API REST. Il
 # n'est qu'un complément : s'il n'a pas répondu à temps, les autres sources
 # suffisent, donc on ne l'attend pas indéfiniment.

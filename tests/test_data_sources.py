@@ -139,6 +139,60 @@ class TestOddsKeyResolution:
 
 
 # ==========================================================================
+# Reprise après coupure réseau
+#
+# Constaté en conditions réelles : un seul ConnectionError faisait perdre les
+# cotes d'un match, et la confiance de l'analyse chutait sans raison visible.
+# ==========================================================================
+class TestNetworkRetry:
+    @pytest.fixture
+    def client(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(cfg, "HTTP_CACHE_FILE", tmp_path / "c.json")
+        monkeypatch.setattr(cfg, "QUOTA_FILE", tmp_path / "q.json")
+        monkeypatch.setattr(cfg, "HTTP_RETRY_DELAY", 0.0)   # pas d'attente en test
+        return ds.HttpClient(ds.CacheStore(tmp_path / "c.json"), ds.QuotaTracker(tmp_path / "q.json"))
+
+    @staticmethod
+    def _reponse(payload):
+        class R:
+            status_code = 200
+            headers: dict = {}
+            def json(self): return payload
+        return R()
+
+    def test_recovers_after_a_transient_failure(self, client, monkeypatch):
+        appels = []
+
+        def flaky(*_a, **_k):
+            appels.append(1)
+            if len(appels) == 1:
+                raise requests_exceptions_connection()
+            return TestNetworkRetry._reponse({"ok": True})
+
+        monkeypatch.setattr(client.session, "get", flaky)
+        got = client.get_json("https://exemple.test/x")
+        assert got is not None and got[0] == {"ok": True}
+        assert len(appels) == 2, "le second essai doit aboutir"
+
+    def test_gives_up_after_the_configured_number_of_tries(self, client, monkeypatch):
+        appels = []
+
+        def toujours_ko(*_a, **_k):
+            appels.append(1)
+            raise requests_exceptions_connection()
+
+        monkeypatch.setattr(client.session, "get", toujours_ko)
+        assert client.get_json("https://exemple.test/y") is None
+        assert len(appels) == cfg.HTTP_RETRIES + 1
+        assert "network" in (client.last_error or "")
+
+
+def requests_exceptions_connection() -> Exception:
+    import requests
+    return requests.ConnectionError("panne simulée")
+
+
+# ==========================================================================
 # Affiches réellement programmées
 #
 # Une compétition de vingt équipes offre 380 appariements, mais une dizaine

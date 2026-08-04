@@ -12,12 +12,16 @@ Lancement :  streamlit run app.py
 
 from __future__ import annotations
 
+import hashlib
 import html
+from pathlib import Path
 
 import plotly.graph_objects as go
 import streamlit as st
 
 import config as cfg
+import data_sources as data_sources_module
+import engine as engine_module
 from agent import AnalysisAgent, AnalysisResult, PerformanceAnalyst, TuningAdvisor
 from config import Competition
 from data_sources import DataHub, normalize_name
@@ -165,19 +169,72 @@ PLOT_LAYOUT = dict(
 # ==========================================================================
 # Ressources partagées
 # ==========================================================================
+def _code_version() -> str:
+    """Empreinte du code actuellement chargé.
+
+    Sert de clé de cache aux objets partagés. Sans elle, une instance
+    construite par la version précédente peut survivre à un redéploiement :
+    `st.cache_resource` conserve ses objets tant que le processus vit, et
+    l'application plante alors sur une méthode qui n'existait pas encore
+    — un `AttributeError` incompréhensible, puisque le code source, lui,
+    est bien à jour.
+
+    L'empreinte se calcule une seule fois, à l'import.
+    """
+    marques = []
+    for module in (cfg, data_sources_module, engine_module):
+        chemin = getattr(module, "__file__", None)
+        if not chemin:
+            continue
+        try:
+            infos = Path(chemin).stat()
+        except OSError:
+            continue
+        marques.append(f"{Path(chemin).name}:{infos.st_mtime_ns}:{infos.st_size}")
+    return hashlib.sha1("|".join(marques).encode()).hexdigest()[:12] if marques else "inconnu"
+
+
+CODE_VERSION = _code_version()
+
+
 @st.cache_resource(show_spinner=False)
-def get_hub() -> DataHub:
+def _cache_marker() -> dict[str, str]:
+    """Témoin de la version du code qui a rempli les caches."""
+    return {"version": CODE_VERSION}
+
+
+def drop_stale_caches() -> None:
+    """Vide les caches quand le code a changé depuis qu'ils ont été remplis.
+
+    `st.cache_resource` conserve ses objets tant que le processus vit — y
+    compris au travers d'une mise à jour du code. Une instance construite par
+    la version précédente survit alors, et l'application échoue sur une
+    méthode ajoutée depuis, avec un `AttributeError` d'autant plus
+    déroutant que le fichier source, lui, est bien à jour.
+
+    Ce contrôle ne coûte rien : il ne vide les caches que lorsque
+    l'empreinte du code a réellement changé.
+    """
+    if _cache_marker().get("version") == CODE_VERSION:
+        return
+    st.cache_data.clear()
+    st.cache_resource.clear()
+    _cache_marker()  # recréé avec la version courante
+
+
+@st.cache_resource(show_spinner=False)
+def get_hub(version: str = CODE_VERSION) -> DataHub:
     return DataHub()
 
 
 @st.cache_resource(show_spinner=False)
-def get_agent() -> AnalysisAgent:
+def get_agent(version: str = CODE_VERSION) -> AnalysisAgent:
     """L'agent d'analyse. Un seul par session : il porte le journal local."""
     return AnalysisAgent(get_hub())
 
 
 @st.cache_resource(show_spinner=False)
-def get_advisor() -> TuningAdvisor:
+def get_advisor(version: str = CODE_VERSION) -> TuningAdvisor:
     return TuningAdvisor()
 
 
@@ -207,7 +264,13 @@ def load_fixtures(sport: str, comp_key: str) -> list[tuple[str, str, str]]:
     comp = cfg.competition(sport, comp_key)
     if comp is None:
         return []
-    return [(f.home, f.away, f.label) for f in get_hub().fixtures(comp)]
+    try:
+        return [(f.home, f.away, f.label) for f in get_hub().fixtures(comp)]
+    except Exception:
+        # Le calendrier est un confort, pas une dépendance : sans lui
+        # l'application retombe sur le choix libre des deux équipes. Aucune
+        # raison de faire tomber toute la page.
+        return []
 
 
 # ==========================================================================
@@ -911,7 +974,10 @@ def load_scorers(sport: str, comp_key: str, home: str, away: str) -> list[tuple[
     comp = cfg.competition(sport, comp_key)
     if comp is None:
         return []
-    board = get_hub().goal_scorers(comp, home, away)
+    try:
+        board = get_hub().goal_scorers(comp, home, away)
+    except Exception:
+        return []      # carte « données indisponibles », jamais une page en erreur
     return [(s.player, s.probability, s.price) for s in board.scorers] if board else []
 
 
@@ -1346,6 +1412,7 @@ def render_secrets_alert() -> None:
 
 
 def main() -> None:
+    drop_stale_caches()
     render_header()
     render_secrets_alert()
     comp, home, away, launch = render_controls()

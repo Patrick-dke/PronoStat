@@ -4,7 +4,7 @@
     {
       "name": "pronostat",
       "runtimeExecutable": ".venv/Scripts/python.exe",
-      "runtimeArgs": ["-m", "streamlit", "run", "app.py", "--server.port", "8501", "--server.headless", "true"],
+      "runtimeArgs": ["-m", "streamlit", "run", "app.py", "--server.port", "8501", "--server.headless", "true", "--server.address", "0.0.0.0"],
       "port": 8501
     }
   ]

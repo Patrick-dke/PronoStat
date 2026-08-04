@@ -199,27 +199,39 @@ CODE_VERSION = _code_version()
 
 @st.cache_resource(show_spinner=False)
 def _cache_marker() -> dict[str, str]:
-    """Témoin de la version du code qui a rempli les caches."""
-    return {"version": CODE_VERSION}
+    """Témoin de l'état qui a rempli les caches : version du code et clés."""
+    return {"version": CODE_VERSION, "cles": cfg.keys_fingerprint()}
 
 
 def drop_stale_caches() -> None:
-    """Vide les caches quand le code a changé depuis qu'ils ont été remplis.
+    """Vide les caches quand le code **ou les clés** ont changé.
 
-    `st.cache_resource` conserve ses objets tant que le processus vit — y
-    compris au travers d'une mise à jour du code. Une instance construite par
-    la version précédente survit alors, et l'application échoue sur une
-    méthode ajoutée depuis, avec un `AttributeError` d'autant plus
-    déroutant que le fichier source, lui, est bien à jour.
+    Deux pannes distinctes, même remède :
 
-    Ce contrôle ne coûte rien : il ne vide les caches que lorsque
-    l'empreinte du code a réellement changé.
+    1. `st.cache_resource` conserve ses objets tant que le processus vit, y
+       compris au travers d'une mise à jour du code. Une instance construite
+       par la version précédente survit alors et l'application échoue sur une
+       méthode ajoutée depuis.
+    2. Les secrets sont presque toujours renseignés **après** le premier
+       démarrage. `cfg.KEYS` étant calculé à l'import, l'application continue
+       sinon à tourner sans clé alors qu'elle en a une — indéfiniment, car
+       aucun changement de code ne vient réveiller les caches.
+
+    On relit donc les clés à chaque exécution : l'opération est locale, sans
+    appel réseau, et c'est le seul moyen de voir apparaître un secret ajouté
+    en cours de route.
     """
-    if _cache_marker().get("version") == CODE_VERSION:
+    cles_changees = cfg.refresh_keys()
+    marqueur = _cache_marker()
+    if (
+        not cles_changees
+        and marqueur.get("version") == CODE_VERSION
+        and marqueur.get("cles") == cfg.keys_fingerprint()
+    ):
         return
     st.cache_data.clear()
     st.cache_resource.clear()
-    _cache_marker()  # recréé avec la version courante
+    _cache_marker()  # recréé avec l'état courant
 
 
 @st.cache_resource(show_spinner=False)

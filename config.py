@@ -431,6 +431,36 @@ class ApiKeys:
 KEYS = ApiKeys.from_environment()
 
 
+def refresh_keys() -> bool:
+    """Relit les clés et signale si elles ont changé.
+
+    `KEYS` est construit à l'import du module. Or les secrets sont souvent
+    renseignés *après* le premier démarrage de l'application : sans relecture,
+    celle-ci continue indéfiniment à tourner sans clé alors qu'elle en a une,
+    et l'utilisateur ne comprend pas pourquoi rien ne change.
+    """
+    global KEYS
+    nouvelles = ApiKeys.from_environment()
+    change = nouvelles != KEYS
+    KEYS = nouvelles
+    return change
+
+
+def keys_fingerprint() -> str:
+    """Empreinte des clés *présentes*, sans jamais exposer leur valeur.
+
+    Seule la présence compte : elle suffit à savoir qu'il faut reconstruire
+    les objets partagés, sans qu'aucun secret ne circule.
+    """
+    presentes = [
+        nom for nom, valeur in (
+            ("odds", KEYS.odds_api), ("fd", KEYS.football_data),
+            ("rapid", KEYS.rapidapi), ("bdl", KEYS.balldontlie),
+        ) if valeur
+    ]
+    return ",".join(presentes) or "aucune"
+
+
 def secrets_report() -> dict[str, object]:
     """État de la configuration, sans jamais révéler une seule valeur.
 

@@ -369,3 +369,31 @@ class TestSecretsReport:
         monkeypatch.delenv("RAPIDAPI_KEY", raising=False)
         rapport = cfg.secrets_report()
         assert rapport["origine"]["RAPIDAPI_KEY"] == "ABSENTE"
+
+
+class TestKeyRefresh:
+    """Les secrets sont presque toujours renseignés APRÈS le premier démarrage.
+    Sans relecture, l'application tourne sans clé alors qu'elle en a une."""
+
+    def test_a_key_added_after_startup_is_detected(self, monkeypatch):
+        monkeypatch.delenv("ODDS_API_KEY", raising=False)
+        monkeypatch.setattr(cfg, "KEYS", cfg.ApiKeys(odds_api="", thesportsdb="3"))
+        assert cfg.keys_fingerprint() == "aucune"
+
+        monkeypatch.setenv("ODDS_API_KEY", "abcdef0123456789")
+        assert cfg.refresh_keys() is True
+        assert cfg.KEYS.odds_api == "abcdef0123456789"
+        assert "odds" in cfg.keys_fingerprint()
+
+    def test_no_change_is_reported_when_nothing_moves(self, monkeypatch):
+        monkeypatch.setenv("ODDS_API_KEY", "abcdef0123456789")
+        cfg.refresh_keys()
+        assert cfg.refresh_keys() is False, "sans changement, aucun vidage de cache"
+
+    def test_fingerprint_never_contains_a_key_value(self, monkeypatch):
+        secret = "TRESSECRET0123456789"
+        monkeypatch.setenv("ODDS_API_KEY", secret)
+        cfg.refresh_keys()
+        empreinte = cfg.keys_fingerprint()
+        assert secret not in empreinte
+        assert secret[:6] not in empreinte

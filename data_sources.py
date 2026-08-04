@@ -768,6 +768,30 @@ class QuotaTracker:
         return True if st is None else st.remaining >= cost
 
 
+def _api_error_message(resp: "requests.Response", limite: int = 160) -> str:
+    """Extrait l'explication d'une réponse en erreur, si elle en porte une.
+
+    Les API renvoient leur diagnostic sous des clés variables (`message`,
+    `error`, `detail`…). On tente le JSON ; une page d'erreur HTML n'apprend
+    rien et ne doit surtout pas remonter jusqu'à l'interface, on la laisse de
+    côté. Le résultat est toujours tronqué : il finit sous les yeux de
+    l'utilisateur.
+    """
+    try:
+        corps = resp.json()
+    except ValueError:
+        texte = " ".join(resp.text.split())
+        if texte[:1] == "<" or "text/html" in resp.headers.get("content-type", ""):
+            return ""          # page d'erreur générique : aucun contenu utile
+        return texte[:limite]
+    if isinstance(corps, dict):
+        for cle in ("message", "error", "detail", "error_message", "msg"):
+            valeur = corps.get(cle)
+            if isinstance(valeur, str) and valeur.strip():
+                return valeur.strip()[:limite]
+    return " ".join(str(corps).split())[:limite]
+
+
 # ==========================================================================
 # Client HTTP : cache + quota + tolérance aux pannes
 # ==========================================================================
@@ -838,7 +862,24 @@ class HttpClient:
             self._sync_quota(provider, resp, cost)
 
         if resp.status_code != 200:
+            # Le corps porte souvent la seule explication utilisable (marché
+            # invalide, clé révoquée, paramètre inconnu). Sans lui, un 422
+            # parfaitement explicite se réduit à « aucune réponse » et la
+            # panne devient indiagnosticable.
             self.last_error = f"http_{resp.status_code}"
+            detail = _api_error_message(resp)
+            if detail:
+                self.last_error += f": {detail}"
+            # 400/401/403/422 traduisent une erreur de configuration de notre
+            # côté : clé invalide, marché inexistant, paramètre refusé. Elles
+            # méritent d'être vues même en production, où seuls les WARNING
+            # sont conservés. Un 404 ou un 5xx sur une source de repli est en
+            # revanche un fonctionnement normal : on n'en fait pas une alerte.
+            grave = resp.status_code in (400, 401, 403, 422)
+            (log.warning if grave else log.info)(
+                "%s a repondu %s — %s",
+                provider or "source inconnue", resp.status_code, detail or "sans detail",
+            )
             stale = self.cache.get_stale(key)
             return (stale[0], stale[1], True) if stale else None
 
@@ -1045,8 +1086,14 @@ class TheOddsApiProvider(BaseProvider):
 
     # Marchés demandés par sport. Chaque marché coûte un crédit : on ne
     # demande que ceux que le moteur sait exploiter pour ce sport.
+    #
+    # `btts` est volontairement absent : l'endpoint /odds le refuse avec un
+    # HTTP 422 « Markets not supported by this endpoint », ce qui faisait
+    # échouer TOUTES les requêtes de cotes football, marchés valides compris.
+    # La probabilité « les deux marquent » reste produite par le Monte Carlo
+    # (engine.py), elle n'a jamais dépendu du marché.
     MARKETS = {
-        "football": "h2h,totals,spreads,btts",
+        "football": "h2h,totals,spreads",
         "hockey": "h2h,totals,spreads",
         "basket": "h2h,totals,spreads",
         "tennis": "h2h,totals",

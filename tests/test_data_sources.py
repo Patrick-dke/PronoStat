@@ -139,6 +139,57 @@ class TestOddsKeyResolution:
 
 
 # ==========================================================================
+# Affiches réellement programmées
+#
+# Une compétition de vingt équipes offre 380 appariements, mais une dizaine
+# seulement sont au calendrier. Sans cette liste, l'utilisateur compose des
+# matchs qui n'existent pas et n'obtient jamais de cotes.
+# ==========================================================================
+class TestFixtures:
+    @pytest.fixture
+    def provider(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(cfg, "HTTP_CACHE_FILE", tmp_path / "c.json")
+        monkeypatch.setattr(cfg, "QUOTA_FILE", tmp_path / "q.json")
+        http = ds.HttpClient(ds.CacheStore(tmp_path / "c.json"), ds.QuotaTracker(tmp_path / "q.json"))
+        prov = ds.TheOddsApiProvider(http, api_key="fake")
+        monkeypatch.setattr(prov, "resolve_keys", lambda _c: ["soccer_epl"])
+        return prov
+
+    def test_fixtures_are_sorted_by_kickoff(self, provider, monkeypatch):
+        monkeypatch.setattr(provider, "_events", lambda *_a: ([
+            {"home_team": "B", "away_team": "C", "commence_time": "2026-08-22T14:00:00Z"},
+            {"home_team": "A", "away_team": "D", "commence_time": "2026-08-21T19:00:00Z"},
+        ], time.time(), False))
+        got = provider.fixtures(comp("football", "premier_league"))
+        assert [(f.home, f.away) for f in got] == [("A", "D"), ("B", "C")]
+
+    def test_undated_fixtures_go_last_without_crashing(self, provider, monkeypatch):
+        """Une date absente ne doit pas faire échouer le tri."""
+        monkeypatch.setattr(provider, "_events", lambda *_a: ([
+            {"home_team": "SansDate", "away_team": "X"},
+            {"home_team": "A", "away_team": "D", "commence_time": "2026-08-21T19:00:00Z"},
+        ], time.time(), False))
+        got = provider.fixtures(comp("football", "premier_league"))
+        assert [f.home for f in got] == ["A", "SansDate"]
+        assert got[-1].starts_at is None
+        assert "date à venir" in got[-1].label
+
+    def test_incomplete_entries_are_dropped(self, provider, monkeypatch):
+        monkeypatch.setattr(provider, "_events", lambda *_a: ([
+            {"home_team": "A"},                     # adversaire manquant
+            {"away_team": "B"},                     # hôte manquant
+            {"home_team": "C", "away_team": "D", "commence_time": "2026-08-21T19:00:00Z"},
+        ], time.time(), False))
+        got = provider.fixtures(comp("football", "premier_league"))
+        assert [(f.home, f.away) for f in got] == [("C", "D")]
+
+    def test_no_calendar_returns_empty_list(self, provider, monkeypatch):
+        """Liste vide, jamais None : l'appelant itère dessus sans précaution."""
+        monkeypatch.setattr(provider, "_events", lambda *_a: None)
+        assert provider.fixtures(comp("football", "premier_league")) == []
+
+
+# ==========================================================================
 # Classement reconstruit depuis les résultats openfootball
 #
 # Les deux fournisseurs de classement exigent une clé payante ou bridée.

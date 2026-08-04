@@ -219,6 +219,20 @@ class TeamForm:
 
 
 @dataclass
+class Fixture:
+    """Rencontre réellement programmée chez les bookmakers."""
+
+    home: str
+    away: str
+    starts_at: "datetime | None" = None
+
+    @property
+    def label(self) -> str:
+        quand = self.starts_at.strftime("%d/%m à %Hh%M") if self.starts_at else "date à venir"
+        return f"{self.home} — {self.away}  ·  {quand}"
+
+
+@dataclass
 class Standing:
     """Ligne de classement d'une équipe."""
 
@@ -1061,6 +1075,43 @@ class TheOddsApiProvider(BaseProvider):
         if not res or not isinstance(res[0], list):
             return None
         return res[0], res[1], res[2]
+
+    def fixtures(self, comp: Competition) -> list[Fixture]:
+        """Rencontres réellement programmées, telles que les bookmakers les publient.
+
+        Distinction capitale pour l'utilisateur : une compétition compte vingt
+        équipes, donc 380 appariements possibles, mais une dizaine seulement
+        sont au calendrier à un instant donné. Choisir librement deux équipes
+        produit presque toujours une affiche qui n'existe pas — et donc aucune
+        cote, sans que rien ne l'ait laissé prévoir.
+
+        L'endpoint `/events` ne consomme aucun crédit : cette liste est
+        gratuite, on peut l'afficher systématiquement.
+        """
+        if not self.handles(comp):
+            return []
+        sorties: list[Fixture] = []
+        for key in self.resolve_keys(comp):
+            got = self._events(key, comp.scope)
+            if not got:
+                continue
+            for ev in got[0]:
+                domicile, exterieur = ev.get("home_team"), ev.get("away_team")
+                if not domicile or not exterieur:
+                    continue
+                sorties.append(
+                    Fixture(
+                        home=str(domicile).strip(),
+                        away=str(exterieur).strip(),
+                        starts_at=_parse_dt(ev.get("commence_time")),
+                    )
+                )
+        # Le prochain match d'abord ; une date absente ne doit pas faire échouer
+        # le tri, on la repousse en fin de liste.
+        return sorted(
+            sorties,
+            key=lambda f: (f.starts_at is None, f.starts_at or datetime.max.replace(tzinfo=UTC)),
+        )
 
     def participants(self, comp: Competition) -> tuple[list[str], Provenance] | None:
         if not self.handles(comp):
@@ -3300,6 +3351,24 @@ class DataHub:
     def roster(self, comp: Competition):
         """Version détaillée : noms + couverture + fiabilité."""
         return self.research.roster(comp)
+
+    def fixtures(self, comp: Competition) -> list[Fixture]:
+        """Affiches réellement programmées, ou liste vide si on ne sait pas.
+
+        L'effectif d'une compétition est fusionné entre plusieurs sources et
+        plusieurs saisons : il contient donc parfois des équipes qui n'y jouent
+        plus, ou des adversaires de coupe venus d'une autre division. Le
+        calendrier des bookmakers, lui, ne décrit que des matchs qui auront
+        vraiment lieu — et c'est le seul périmètre où des cotes existent.
+        """
+        for provider in self.providers:
+            if isinstance(provider, TheOddsApiProvider):
+                try:
+                    return provider.fixtures(comp)
+                except Exception:  # une panne de calendrier ne doit rien bloquer
+                    log.info("calendrier indisponible pour %s", comp.label)
+                    return []
+        return []
 
     # -- collecte pour un match -------------------------------------------
     def collect(

@@ -20,7 +20,7 @@ import streamlit as st
 import config as cfg
 from agent import AnalysisAgent, AnalysisResult, PerformanceAnalyst, TuningAdvisor
 from config import Competition
-from data_sources import DataHub
+from data_sources import DataHub, normalize_name
 from engine import Prediction
 
 st.set_page_config(
@@ -193,6 +193,21 @@ def load_roster(sport: str, comp_key: str) -> tuple[list[str], float | None, flo
         return [], None, 0.0
     result = get_hub().roster(comp)
     return result.names, result.coverage, result.reliability
+
+
+@st.cache_data(ttl=cfg.TTL.events, show_spinner=False)
+def load_fixtures(sport: str, comp_key: str) -> list[tuple[str, str, str]]:
+    """Affiches réellement programmées : (domicile, extérieur, libellé).
+
+    Renvoie des tuples plutôt que des objets : `st.cache_data` sérialise son
+    résultat, et des types simples s'y prêtent sans surprise.
+
+    L'appel ne consomme aucun crédit — l'endpoint calendrier est gratuit.
+    """
+    comp = cfg.competition(sport, comp_key)
+    if comp is None:
+        return []
+    return [(f.home, f.away, f.label) for f in get_hub().fixtures(comp)]
 
 
 # ==========================================================================
@@ -374,6 +389,51 @@ def render_controls() -> tuple[Competition | None, str | None, str | None, bool]
         )
         return comp, None, None, False
 
+    # Les affiches réellement au calendrier. Une compétition de vingt équipes
+    # offre 380 appariements, mais une dizaine seulement se jouent : choisir
+    # librement mène presque toujours à un match qui n'existe pas, donc sans
+    # la moindre cote. On propose donc le calendrier en premier.
+    with st.spinner("Recherche des matchs programmés…"):
+        fixtures = load_fixtures(sport, comp.key)
+
+    mode_key = f"mode_{comp.key}"
+    if fixtures:
+        mode = st.radio(
+            "Choix du match",
+            options=("calendrier", "libre"),
+            format_func=lambda m: (
+                f"📅  Matchs programmés ({len(fixtures)})" if m == "calendrier"
+                else "🔀  Deux adversaires au choix"
+            ),
+            horizontal=True,
+            key=mode_key,
+            label_visibility="collapsed",
+        )
+    else:
+        mode = "libre"
+
+    if mode == "calendrier":
+        col_match, col_go = st.columns([8, 2], vertical_alignment="bottom")
+        with col_match:
+            choix = st.selectbox(
+                "Match à l'affiche",
+                options=range(len(fixtures)),
+                format_func=lambda i: fixtures[i][2],
+                key=f"fixture_{comp.key}",
+            )
+        home, away = fixtures[choix][0], fixtures[choix][1]
+        with col_go:
+            launch = st.button(
+                "Démarrer la simulation",
+                type="primary",
+                use_container_width=True,
+            )
+        st.caption(
+            "Ces rencontres sont celles que les bookmakers cotent aujourd'hui : "
+            "ce sont les seules pour lesquelles des cotes réelles existent."
+        )
+        return comp, home, away, launch
+
     col_a, col_b, col_c = st.columns([4, 4, 2], vertical_alignment="bottom")
     with col_a:
         home = st.selectbox(
@@ -397,6 +457,22 @@ def render_controls() -> tuple[Competition | None, str | None, str | None, bool]
             disabled=not away,
             use_container_width=True,
         )
+
+    # Prévenir AVANT de lancer, pas après : sans cet avertissement, l'analyse
+    # tourne une minute pour finir sur un « cotes indisponibles » que rien ne
+    # laissait prévoir.
+    if fixtures and home and away:
+        programme = any(
+            {normalize_name(h), normalize_name(a)} == {normalize_name(home), normalize_name(away)}
+            for h, a, _ in fixtures
+        )
+        if not programme:
+            st.warning(
+                f"**{home} — {away} n'est pas au calendrier.** L'analyse "
+                "fonctionnera, mais sans cotes réelles : elle reposera sur les "
+                "seules statistiques, avec une confiance nettement plus basse.",
+                icon="📅",
+            )
     note = f"{len(teams)} équipes disponibles · {comp.label}"
     if coverage is not None and coverage < 0.98:
         note += (

@@ -2476,6 +2476,93 @@ class OpenFootballProvider(BaseProvider):
             return None
         return first, second
 
+    # -- classement ------------------------------------------------------
+    def standings(self, comp: Competition) -> tuple[dict[str, Standing], Provenance] | None:
+        """Classement reconstruit à partir des résultats de la saison.
+
+        Les deux fournisseurs de classement du projet exigent une clé
+        (football-data.org, API-Football). Sans elles, aucun classement
+        n'existait — alors que le fichier de saison openfootball, déjà
+        téléchargé et mis en cache pour l'effectif et la forme, contient
+        tous les résultats nécessaires. On le calcule donc ici : aucune
+        requête supplémentaire, aucun quota consommé.
+
+        Une coupe n'a pas de classement : on s'abstient, comme les autres
+        fournisseurs. En début de saison, tant qu'aucun match n'est joué,
+        on renvoie `None` plutôt qu'un tableau de zéros qui donnerait
+        l'illusion d'une information.
+        """
+        if not self.handles(comp) or comp.is_cup:
+            return None
+        got = self._season_file(comp)
+        if not got:
+            return None
+        payload, ts, from_cache, year = got
+
+        cumul: dict[str, dict[str, int]] = {}
+
+        def ligne(nom: str) -> dict[str, int]:
+            return cumul.setdefault(
+                nom,
+                {"played": 0, "points": 0, "gf": 0, "ga": 0, "won": 0, "drawn": 0, "lost": 0},
+            )
+
+        for match in payload.get("matches") or []:
+            score = self._full_time_score(match)
+            if score is None:
+                continue          # match non joué : il ne compte pas
+            noms = []
+            for side in ("team1", "team2"):
+                valeur = match.get(side)
+                if isinstance(valeur, dict):
+                    valeur = valeur.get("name")
+                noms.append(str(valeur).strip() if valeur else "")
+            if not all(noms):
+                continue
+            domicile, exterieur = ligne(noms[0]), ligne(noms[1])
+            buts_dom, buts_ext = int(score[0]), int(score[1])
+
+            for equipe, pour, contre in (
+                (domicile, buts_dom, buts_ext),
+                (exterieur, buts_ext, buts_dom),
+            ):
+                equipe["played"] += 1
+                equipe["gf"] += pour
+                equipe["ga"] += contre
+                if pour > contre:
+                    equipe["won"] += 1
+                    equipe["points"] += 3
+                elif pour == contre:
+                    equipe["drawn"] += 1
+                    equipe["points"] += 1
+                else:
+                    equipe["lost"] += 1
+
+        if not cumul or not any(v["played"] for v in cumul.values()):
+            return None
+
+        classe = sorted(
+            cumul.items(),
+            key=lambda kv: (-kv[1]["points"], -(kv[1]["gf"] - kv[1]["ga"]), -kv[1]["gf"], kv[0]),
+        )
+        table = {
+            nom: Standing(
+                team=nom,
+                rank=rang,
+                played=v["played"],
+                points=v["points"],
+                goals_for=v["gf"],
+                goals_against=v["ga"],
+                won=v["won"],
+                drawn=v["drawn"],
+                lost=v["lost"],
+            )
+            for rang, (nom, v) in enumerate(classe, start=1)
+        }
+        joues = sum(v["played"] for v in cumul.values()) // 2
+        detail = f"{comp.label} {cfg.openfootball_season(year)} — calculé sur {joues} matchs joués"
+        return table, self._prov(ts, from_cache, detail, season=year)
+
     # -- forme récente ---------------------------------------------------
     def form(self, comp: Competition, team: str) -> TeamForm | None:
         """Derniers matchs joués, extraits du calendrier officiel.

@@ -139,6 +139,81 @@ class TestOddsKeyResolution:
 
 
 # ==========================================================================
+# Classement reconstruit depuis les résultats openfootball
+#
+# Les deux fournisseurs de classement exigent une clé payante ou bridée.
+# Ce calcul est la seule source de classement disponible sans clé : il doit
+# être exact, sous peine de fausser la pondération du modèle.
+# ==========================================================================
+class TestOpenFootballStandings:
+    @pytest.fixture
+    def provider(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(cfg, "HTTP_CACHE_FILE", tmp_path / "c.json")
+        monkeypatch.setattr(cfg, "QUOTA_FILE", tmp_path / "q.json")
+        http = ds.HttpClient(ds.CacheStore(tmp_path / "c.json"), ds.QuotaTracker(tmp_path / "q.json"))
+        prov = ds.OpenFootballProvider(http)
+        prov.enabled = True
+        return prov
+
+    @staticmethod
+    def _charge(prov, monkeypatch, matches):
+        monkeypatch.setattr(
+            prov, "_season_file", lambda _c: ({"matches": matches}, time.time(), False, 2025)
+        )
+
+    def test_table_is_exact(self, provider, monkeypatch):
+        # A bat B 2-0 ; B bat C 1-0 ; A et C font 1-1.
+        self._charge(provider, monkeypatch, [
+            {"team1": "A", "team2": "B", "score": {"ft": [2, 0]}},
+            {"team1": "B", "team2": "C", "score": {"ft": [1, 0]}},
+            {"team1": "A", "team2": "C", "score": {"ft": [1, 1]}},
+        ])
+        table, prov = provider.standings(comp("football", "premier_league"))
+
+        assert table["A"].points == 4 and table["A"].won == 1 and table["A"].drawn == 1
+        assert table["B"].points == 3 and table["B"].lost == 1
+        assert table["C"].points == 1 and table["C"].lost == 1
+        assert table["A"].goals_for == 3 and table["A"].goals_against == 1
+        assert [s.team for s in sorted(table.values(), key=lambda x: x.rank)] == ["A", "B", "C"]
+        assert "2 matchs joués" not in prov.detail  # 3 matchs joués, pas 2
+
+    def test_totals_balance(self, provider, monkeypatch):
+        """Identité comptable : la somme des buts marqués égale celle des encaissés."""
+        self._charge(provider, monkeypatch, [
+            {"team1": "A", "team2": "B", "score": {"ft": [3, 1]}},
+            {"team1": "C", "team2": "A", "score": {"ft": [0, 2]}},
+            {"team1": "B", "team2": "C", "score": {"ft": [4, 4]}},
+        ])
+        table, _ = provider.standings(comp("football", "premier_league"))
+        assert sum(s.goals_for for s in table.values()) == sum(s.goals_against for s in table.values())
+        assert sum(s.played for s in table.values()) == 6          # 3 matchs × 2 équipes
+        assert all(s.won + s.drawn + s.lost == s.played for s in table.values())
+
+    def test_unplayed_matches_are_ignored(self, provider, monkeypatch):
+        """Un match sans score ne doit jamais être compté comme un 0-0."""
+        self._charge(provider, monkeypatch, [
+            {"team1": "A", "team2": "B", "score": {"ft": [1, 0]}},
+            {"team1": "A", "team2": "B"},                          # pas encore joué
+        ])
+        table, _ = provider.standings(comp("football", "premier_league"))
+        assert table["A"].played == 1 and table["B"].played == 1
+
+    def test_season_without_a_single_result_returns_none(self, provider, monkeypatch):
+        """Plutôt aucun classement qu'un tableau de zéros trompeur."""
+        self._charge(provider, monkeypatch, [{"team1": "A", "team2": "B"}])
+        assert provider.standings(comp("football", "premier_league")) is None
+
+    def test_cups_have_no_standings(self, provider, monkeypatch):
+        self._charge(provider, monkeypatch, [
+            {"team1": "A", "team2": "B", "score": {"ft": [1, 0]}},
+        ])
+        coupe = Competition(
+            key="c", label="Coupe", sport="football", openfootball_code="x", is_cup=True
+        )
+        assert provider.standings(coupe) is None
+
+
+# ==========================================================================
 # Normalisation / rapprochement des noms
 # ==========================================================================
 class TestNameMatching:

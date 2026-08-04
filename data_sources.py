@@ -219,6 +219,24 @@ class TeamForm:
 
 
 @dataclass
+class ScorerOdds:
+    """Chance qu'un joueur marque, telle que le marché la cote."""
+
+    player: str
+    price: float                 # cote décimale « marque à tout moment »
+    probability: float           # 1/cote — marge du bookmaker incluse
+    bookmaker: str = ""
+
+
+@dataclass
+class ScorerBoard:
+    """Tableau des buteurs probables d'un match."""
+
+    scorers: list[ScorerOdds] = field(default_factory=list)
+    provenance: "Provenance | None" = None
+
+
+@dataclass
 class Fixture:
     """Rencontre réellement programmée chez les bookmakers."""
 
@@ -1149,6 +1167,99 @@ class TheOddsApiProvider(BaseProvider):
         "basket": "h2h,totals,spreads",
         "tennis": "h2h,totals",
     }
+
+    # Marché des buteurs. Absent de MARKETS car l'endpoint groupé /odds le
+    # refuse : il n'existe que sur l'endpoint d'un événement précis.
+    SCORER_MARKET = "player_goal_scorer_anytime"
+    # Au-delà, les bookmakers n'ont pas encore ouvert le marché : on n'appelle
+    # pas l'API pour rien.
+    SCORER_MAX_DAYS = 4
+
+    def goal_scorers(self, comp: Competition, home: str, away: str) -> ScorerBoard | None:
+        """Probabilités de marquer, telles que les bookmakers les cotent.
+
+        Deux limites assumées, et affichées à l'utilisateur :
+
+        1. Les bookmakers ne publient ces cotes qu'à l'approche du coup
+           d'envoi — souvent moins de trois jours avant. Plus tôt, la réponse
+           est vide, et ce n'est pas une panne.
+        2. Seul le côté « Yes » est coté. Sans le « No » correspondant, la
+           marge du bookmaker ne peut pas être retirée : `1/cote` est donc une
+           probabilité **implicite**, légèrement surestimée. On ne prétend pas
+           l'avoir corrigée, et on ne normalise pas non plus — « marquer » n'est
+           pas un ensemble d'issues exclusives, plusieurs joueurs marquent
+           souvent dans le même match.
+        """
+        if not self.enabled or comp.sport != "football":
+            return None
+        for key in self.resolve_keys(comp):
+            got = self._events(key, comp.scope)
+            if not got:
+                continue
+            event, _score = self._find_event(got[0], home, away)
+            if event is None:
+                continue
+            # Économie de quota : ce marché n'est jamais publié longtemps à
+            # l'avance. Interroger un match lointain dépense un crédit pour
+            # une réponse vide garantie.
+            debut = _parse_dt(event.get("commence_time"))
+            if debut is not None and (debut - datetime.now(UTC)).days > self.SCORER_MAX_DAYS:
+                log.info(
+                    "buteurs %s vs %s : match dans plus de %d jours, marché pas encore ouvert",
+                    home, away, self.SCORER_MAX_DAYS,
+                )
+                return None
+            res = self.http.get_json(
+                f"{self.BASE}/sports/{key}/events/{event.get('id', '')}/odds",
+                params={
+                    "apiKey": self.api_key,
+                    "regions": os.getenv("ODDS_REGIONS", "eu,uk,us").split(",")[0].strip() or "eu",
+                    "markets": self.SCORER_MARKET,
+                    "oddsFormat": "decimal",
+                    "dateFormat": "iso",
+                },
+                ttl=cfg.TTL.odds,
+                provider=self.name,
+                cost=1,
+                scope=comp.scope,
+            )
+            if not res:
+                log.info("buteurs %s vs %s : %s", home, away, self.http.last_error or "réponse vide")
+                return None
+
+            payload, ts, from_cache = res
+            # Un joueur peut être coté par plusieurs bookmakers : on retient la
+            # cote la plus généreuse, celle qui minore le moins ses chances.
+            meilleur: dict[str, tuple[float, str]] = {}
+            for book in (payload or {}).get("bookmakers", []) or []:
+                for marche in book.get("markets", []) or []:
+                    if marche.get("key") != self.SCORER_MARKET:
+                        continue
+                    for issue in marche.get("outcomes", []) or []:
+                        if str(issue.get("name", "")).lower() not in ("yes", "oui"):
+                            continue
+                        joueur = str(issue.get("description") or "").strip()
+                        prix = _to_float(issue.get("price"))
+                        if not joueur or not prix or prix <= 1.0:
+                            continue
+                        connu = meilleur.get(joueur)
+                        if connu is None or prix > connu[0]:
+                            meilleur[joueur] = (prix, str(book.get("title") or book.get("key") or ""))
+            if not meilleur:
+                return None
+
+            lignes = sorted(
+                (
+                    ScorerOdds(player=nom, price=prix, probability=1.0 / prix, bookmaker=source)
+                    for nom, (prix, source) in meilleur.items()
+                ),
+                key=lambda s: -s.probability,
+            )
+            return ScorerBoard(
+                scorers=lignes,
+                provenance=self._prov(ts, from_cache, f"{len(lignes)} joueurs cotés"),
+            )
+        return None
 
     def odds(
         self,
@@ -3351,6 +3462,23 @@ class DataHub:
     def roster(self, comp: Competition):
         """Version détaillée : noms + couverture + fiabilité."""
         return self.research.roster(comp)
+
+    def goal_scorers(self, comp: Competition, home: str, away: str) -> ScorerBoard | None:
+        """Buteurs probables du match, ou None si le marché n'est pas publié.
+
+        Rien n'est déduit ni estimé : sans cotes buteur, on ne renvoie rien
+        plutôt qu'un classement fabriqué à partir de la forme collective.
+        """
+        if comp.sport != "football":
+            return None
+        for provider in self.providers:
+            if isinstance(provider, TheOddsApiProvider):
+                try:
+                    return provider.goal_scorers(comp, home, away)
+                except Exception:
+                    log.info("buteurs indisponibles pour %s - %s", home, away)
+                    return None
+        return None
 
     def fixtures(self, comp: Competition) -> list[Fixture]:
         """Affiches réellement programmées, ou liste vide si on ne sait pas.

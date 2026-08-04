@@ -190,6 +190,105 @@ class TestFixtures:
 
 
 # ==========================================================================
+# Cotes buteur
+#
+# Marché non exclusif : plusieurs joueurs marquent dans un même match, la
+# somme des probabilités dépasse donc 100 %. Toute normalisation serait fausse.
+# ==========================================================================
+class TestGoalScorers:
+    @pytest.fixture
+    def provider(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(cfg, "HTTP_CACHE_FILE", tmp_path / "c.json")
+        monkeypatch.setattr(cfg, "QUOTA_FILE", tmp_path / "q.json")
+        http = ds.HttpClient(ds.CacheStore(tmp_path / "c.json"), ds.QuotaTracker(tmp_path / "q.json"))
+        prov = ds.TheOddsApiProvider(http, api_key="fake")
+        monkeypatch.setattr(prov, "resolve_keys", lambda _c: ["soccer_epl"])
+        demain = datetime.now(UTC) + timedelta(days=1)
+        monkeypatch.setattr(prov, "_events", lambda *_a: ([{
+            "id": "e1", "home_team": "A", "away_team": "B",
+            "commence_time": demain.isoformat(),
+        }], time.time(), False))
+        return prov
+
+    @staticmethod
+    def _repond(prov, monkeypatch, bookmakers):
+        monkeypatch.setattr(
+            prov.http, "get_json",
+            lambda *_a, **_k: ({"bookmakers": bookmakers}, time.time(), False),
+        )
+
+    def test_players_sorted_by_probability(self, provider, monkeypatch):
+        self._repond(provider, monkeypatch, [{"title": "Book", "markets": [{
+            "key": "player_goal_scorer_anytime",
+            "outcomes": [
+                {"name": "Yes", "description": "Lointain", "price": 8.0},
+                {"name": "Yes", "description": "Favori", "price": 2.0},
+            ],
+        }]}])
+        board = provider.goal_scorers(comp("football", "premier_league"), "A", "B")
+        assert [s.player for s in board.scorers] == ["Favori", "Lointain"]
+        assert board.scorers[0].probability == pytest.approx(0.5)
+
+    def test_best_price_wins_across_bookmakers(self, provider, monkeypatch):
+        """La cote la plus généreuse est retenue : elle minore le moins ses chances."""
+        marche = lambda prix: {"key": "player_goal_scorer_anytime", "outcomes": [
+            {"name": "Yes", "description": "Joueur", "price": prix}]}
+        self._repond(provider, monkeypatch, [
+            {"title": "Serré", "markets": [marche(3.0)]},
+            {"title": "Généreux", "markets": [marche(4.0)]},
+        ])
+        board = provider.goal_scorers(comp("football", "premier_league"), "A", "B")
+        assert len(board.scorers) == 1
+        assert board.scorers[0].price == 4.0
+        assert board.scorers[0].bookmaker == "Généreux"
+
+    def test_invalid_entries_are_dropped(self, provider, monkeypatch):
+        self._repond(provider, monkeypatch, [{"title": "Book", "markets": [{
+            "key": "player_goal_scorer_anytime",
+            "outcomes": [
+                {"name": "No", "description": "Cote inverse", "price": 1.2},   # pas le bon côté
+                {"name": "Yes", "description": "", "price": 3.0},              # sans nom
+                {"name": "Yes", "description": "Cote nulle", "price": 1.0},    # cote impossible
+                {"name": "Yes", "description": "Valide", "price": 5.0},
+            ],
+        }]}])
+        board = provider.goal_scorers(comp("football", "premier_league"), "A", "B")
+        assert [s.player for s in board.scorers] == ["Valide"]
+
+    def test_probabilities_are_not_normalised(self, provider, monkeypatch):
+        """Marquer n'est pas une issue exclusive : la somme peut dépasser 100 %."""
+        self._repond(provider, monkeypatch, [{"title": "Book", "markets": [{
+            "key": "player_goal_scorer_anytime",
+            "outcomes": [
+                {"name": "Yes", "description": f"J{i}", "price": 2.0} for i in range(4)
+            ],
+        }]}])
+        board = provider.goal_scorers(comp("football", "premier_league"), "A", "B")
+        assert sum(s.probability for s in board.scorers) == pytest.approx(2.0)
+
+    def test_distant_match_costs_no_credit(self, tmp_path, monkeypatch):
+        """Le marché n'ouvre qu'à l'approche : inutile d'appeler l'API avant."""
+        monkeypatch.setattr(cfg, "HTTP_CACHE_FILE", tmp_path / "c.json")
+        monkeypatch.setattr(cfg, "QUOTA_FILE", tmp_path / "q.json")
+        http = ds.HttpClient(ds.CacheStore(tmp_path / "c.json"), ds.QuotaTracker(tmp_path / "q.json"))
+        prov = ds.TheOddsApiProvider(http, api_key="fake")
+        monkeypatch.setattr(prov, "resolve_keys", lambda _c: ["soccer_epl"])
+        lointain = datetime.now(UTC) + timedelta(days=ds.TheOddsApiProvider.SCORER_MAX_DAYS + 3)
+        monkeypatch.setattr(prov, "_events", lambda *_a: ([{
+            "id": "e1", "home_team": "A", "away_team": "B",
+            "commence_time": lointain.isoformat(),
+        }], time.time(), False))
+
+        appels = []
+        monkeypatch.setattr(prov.http, "get_json", lambda *a, **k: appels.append(1))
+        assert prov.goal_scorers(comp("football", "premier_league"), "A", "B") is None
+        assert appels == [], "aucun appel réseau ne doit partir pour un match lointain"
+
+    def test_other_sports_are_ignored(self, provider):
+        assert provider.goal_scorers(comp("tennis", "atp_tour"), "A", "B") is None
+
+
+# ==========================================================================
 # Classement reconstruit depuis les résultats openfootball
 #
 # Les deux fournisseurs de classement exigent une clé payante ou bridée.

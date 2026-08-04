@@ -905,6 +905,54 @@ def render_markets(pred: Prediction) -> None:
             st.markdown(card("Total de jeux", body), unsafe_allow_html=True)
 
 
+@st.cache_data(ttl=cfg.TTL.odds, show_spinner=False)
+def load_scorers(sport: str, comp_key: str, home: str, away: str) -> list[tuple[str, float, float]]:
+    """Buteurs cotés par le marché : (joueur, probabilité, cote)."""
+    comp = cfg.competition(sport, comp_key)
+    if comp is None:
+        return []
+    board = get_hub().goal_scorers(comp, home, away)
+    return [(s.player, s.probability, s.price) for s in board.scorers] if board else []
+
+
+def render_scorers(pred: Prediction) -> None:
+    """Buteurs probables — uniquement au football, uniquement si le marché les cote.
+
+    Rien n'est déduit de la forme collective : sans cotes buteur, la carte
+    affiche « données indisponibles » plutôt qu'un classement fabriqué.
+    """
+    if pred.sport != "football" or pred.competition is None:
+        return
+
+    with st.spinner("Recherche des cotes buteur…"):
+        scorers = load_scorers(pred.sport, pred.competition.key, pred.home, pred.away)
+
+    if not scorers:
+        body = (
+            f'<div class="ps-sub">{badge("Données indisponibles", "warn")}</div>'
+            '<div class="ps-sub" style="margin-top:.5rem">Les bookmakers ne publient '
+            "les cotes buteur qu'à l'approche du coup d'envoi, généralement moins de "
+            "trois jours avant.</div>"
+        )
+        st.markdown(card("Buteurs probables", body), unsafe_allow_html=True)
+        return
+
+    # La cote passe par `extra` : `prob_row` échappe son libellé, un balisage
+    # glissé dedans s'afficherait tel quel.
+    lignes = "".join(
+        prob_row(joueur, proba, extra=f' <span class="ps-tag">{cote:.2f}</span>')
+        for joueur, proba, cote in scorers[:8]
+    )
+    note = (
+        '<div class="ps-sub" style="margin-top:.6rem">'
+        f'{badge("Probabilité implicite du marché", "gold")} '
+        "Marge du bookmaker incluse : ces valeurs sont légèrement surestimées. "
+        "Leur somme dépasse 100 %, plusieurs joueurs marquant souvent dans le même match."
+        "</div>"
+    )
+    st.markdown(card("Buteurs probables", lignes + note), unsafe_allow_html=True)
+
+
 def render_market_comparison(pred: Prediction, market=None) -> None:
     compared = [l for l in pred.lines if l.market_prob is not None]
     title = "Notre estimation face aux bookmakers"
@@ -1346,6 +1394,8 @@ def main() -> None:
         render_probabilities(prediction)
         st.write("")
         render_markets(prediction)
+        st.write("")
+        render_scorers(prediction)
         st.write("")
         col_a, col_b = st.columns([1, 1])
         with col_a:

@@ -235,14 +235,32 @@ def drop_stale_caches() -> None:
 
 
 @st.cache_resource(show_spinner=False)
-def get_hub(version: str = CODE_VERSION) -> DataHub:
+def _build_hub(version: str, cles: str) -> DataHub:
+    """Construit le hub. Les arguments ne servent qu'à indexer le cache."""
     return DataHub()
 
 
+def get_hub() -> DataHub:
+    """Le hub de données, reconstruit dès que le code ou les clés changent.
+
+    L'empreinte des clés est calculée **à chaque appel**, et non figée dans
+    une valeur par défaut. C'est la seule façon fiable de reconstruire le hub
+    quand un secret apparaît en cours de route : sans cela, l'instance mise
+    en cache garde ses clés vides et la source de cotes reste éteinte, alors
+    même que la configuration est correcte.
+    """
+    cfg.refresh_keys()
+    return _build_hub(CODE_VERSION, cfg.keys_fingerprint())
+
+
 @st.cache_resource(show_spinner=False)
-def get_agent(version: str = CODE_VERSION) -> AnalysisAgent:
-    """L'agent d'analyse. Un seul par session : il porte le journal local."""
+def _build_agent(version: str, cles: str) -> AnalysisAgent:
     return AnalysisAgent(get_hub())
+
+
+def get_agent() -> AnalysisAgent:
+    """L'agent d'analyse. Il porte le journal local et suit le même cycle."""
+    return _build_agent(CODE_VERSION, cfg.keys_fingerprint())
 
 
 @st.cache_resource(show_spinner=False)

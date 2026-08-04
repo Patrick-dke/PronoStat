@@ -93,3 +93,37 @@ class TestPublicWording:
 
     def test_unknown_source_has_a_readable_fallback(self):
         assert cfg.public_name("source_inconnue") == "Source sportive"
+
+
+class TestHubRebuildOnKeyChange:
+    """Un secret ajouté après le démarrage doit reconstruire le hub.
+
+    Sans cela, l'instance mise en cache garde ses clés vides et la source de
+    cotes reste éteinte alors que la configuration est correcte — panne
+    observée en production, invisible depuis l'extérieur.
+    """
+
+    @staticmethod
+    def _provider(hub):
+        return next(
+            p for p in hub.providers if p.__class__.__name__ == "TheOddsApiProvider"
+        )
+
+    def test_provider_wakes_up_when_the_key_appears(self, monkeypatch):
+        import app
+
+        monkeypatch.delenv("ODDS_API_KEY", raising=False)
+        monkeypatch.setattr(cfg, "KEYS", cfg.ApiKeys(odds_api="", thesportsdb="3"))
+        avant = app.get_hub()
+        assert self._provider(avant).enabled is False
+
+        monkeypatch.setenv("ODDS_API_KEY", "0123456789abcdef")
+        apres = app.get_hub()
+        assert self._provider(apres).enabled is True
+        assert apres is not avant, "le hub doit être reconstruit, pas réutilisé"
+
+    def test_same_keys_reuse_the_same_hub(self, monkeypatch):
+        import app
+
+        monkeypatch.setenv("ODDS_API_KEY", "0123456789abcdef")
+        assert app.get_hub() is app.get_hub(), "sans changement, pas de reconstruction"

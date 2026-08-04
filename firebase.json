@@ -1,16 +1,17 @@
 {
+  "_commentaire": [
+    "Firebase Hosting sert ici une page d'accueil qui REDIRIGE vers l'application.",
+    "Ce n'est volontairement pas un proxy : Hosting ne relaie pas les connexions",
+    "WebSocket, et Streamlit ne fonctionne que par WebSocket. Un rewrite '**' vers",
+    "Cloud Run se deploie sans la moindre erreur, la page se charge... et",
+    "l'application reste figee indefiniment. Detail dans FIREBASE-CLOUDRUN.md.",
+    "",
+    "L'URL de destination se renseigne dans public/app-url.js.",
+    "Cette configuration fonctionne sur le plan gratuit Spark : aucune carte."
+  ],
   "hosting": {
     "public": "public",
     "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
-    "rewrites": [
-      {
-        "source": "**",
-        "run": {
-          "serviceId": "pronostat",
-          "region": "europe-west1"
-        }
-      }
-    ],
     "headers": [
       {
         "source": "**",

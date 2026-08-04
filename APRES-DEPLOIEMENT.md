@@ -28,11 +28,19 @@ PRONOSTAT_DEBUG = "false"
 PRONOSTAT_CACHE_DIR = "/tmp/pronostat-cache"
 PRONOSTAT_USER_AGENT = "PronoStat/3.0 (contact: manjiadiandoukepatricksylvain@gmail.com)"
 
+ODDS_API_KEY = "COLLEZ_VOTRE_CLE_ICI"
+
 THESPORTSDB_API_KEY = "3"
 ODDS_REGIONS = "eu,uk,us"
 MARKET_WEIGHT = "0.60"
 MC_SIMS = "20000"
 ```
+
+> Remplacez `COLLEZ_VOTRE_CLE_ICI` par la clé reçue à l'inscription sur
+> <https://the-odds-api.com/>. **C'est la ligne qui fait apparaître les cotes** :
+> sans elle, l'application affiche en permanence « Aucune clé de cotes
+> configurée » et le tennis reste vide. Si vous n'avez pas encore la clé,
+> supprimez la ligne entière — vous la rajouterez plus tard.
 
 Pourquoi ces valeurs :
 
@@ -47,19 +55,36 @@ L'application redémarre seule après la sauvegarde.
 
 ---
 
-## 2. Ajouter la clé des cotes (optionnel, recommandé)
+## 2. Obtenir la clé des cotes
 
-Sans elle, l'application **fonctionne**, mais s'appuie sur le repère de saison au lieu des cotes réelles du match — et le tennis reste indisponible, car les tournois n'existent que via cette source.
+C'est la clé qui débloque le cœur de la méthode : sans elle, les probabilités ne sont plus ancrées aux cotes réelles du marché, et l'application affiche « Aucune clé de cotes configurée ».
 
-1. Inscription gratuite : <https://the-odds-api.com/> (≈ 500 requêtes/mois)
-2. Copier la clé reçue
-3. **Settings → Secrets**, ajouter la ligne :
+1. Inscription gratuite : <https://the-odds-api.com/> (≈ 500 requêtes/mois, sans carte bancaire)
+2. La clé arrive par e-mail, immédiatement
+3. La coller dans le bloc du §1, à la place de `COLLEZ_VOTRE_CLE_ICI`
 
-```toml
-ODDS_API_KEY = "votre_cle_ici"
+**En local aussi**, pour tester sur votre ordinateur : ouvrez `.env` dans le Bloc-notes, ligne 10, et complétez :
+
+```
+ODDS_API_KEY=votre_cle_ici
 ```
 
-Autres clés facultatives, même principe : `RAPIDAPI_KEY` (API-Football : xG, corners, tirs), `FOOTBALL_DATA_API_KEY` (classements grandes ligues), `BALLDONTLIE_API_KEY` (NBA). La liste complète et commentée est dans `.env.example`.
+Sans espaces autour du `=`, sans guillemets — le format `.env` diffère de celui des secrets Streamlit.
+
+### Ce que la clé change, sport par sport
+
+| Sport | Sans clé | Avec clé |
+|---|---|---|
+| Football | Modèle statistique seul, repère de saison | Cotes réelles + no-vig, confiance nettement plus haute |
+| Basket | Idem, via balldontlie si sa clé est posée | Cotes réelles, totaux et spreads |
+| Hockey | Idem, via l'API NHL publique | Cotes réelles, puck line |
+| **Tennis** | **Indisponible** — aucune liste de joueurs | Tournois et joueurs en cours |
+
+Le tennis est le cas dur : les tournois n'existent que via cette source, il n'y a pas de repli gratuit.
+
+### Autres clés, facultatives
+
+Même principe, chacune ajoute des données sans être nécessaire : `RAPIDAPI_KEY` (API-Football : xG, corners, tirs), `FOOTBALL_DATA_API_KEY` (classements grandes ligues), `BALLDONTLIE_API_KEY` (NBA). La liste commentée est dans `.env.example`.
 
 ---
 

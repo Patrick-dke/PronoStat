@@ -1,0 +1,139 @@
+[debug] [2026-08-04T19:52:50.832Z] ----------------------------------------------------------------------
+[debug] [2026-08-04T19:52:50.860Z] Command:       C:\Program Files\nodejs\node.exe C:\Users\pc\AppData\Roaming\npm\node_modules\firebase-tools\lib\bin\firebase.js deploy --only hosting --project pronostat-8a2a8
+[debug] [2026-08-04T19:52:50.861Z] CLI Version:   15.23.0
+[debug] [2026-08-04T19:52:50.861Z] Platform:      win32
+[debug] [2026-08-04T19:52:50.861Z] Node Version:  v24.18.0
+[debug] [2026-08-04T19:52:50.862Z] Detected Agent: claude-code_2-1-219_agent
+[debug] [2026-08-04T19:52:50.866Z] Time:          Tue Aug 04 2026 20:52:50 GMT+0100 (heure d’Afrique de l’Ouest)
+[debug] [2026-08-04T19:52:50.868Z] ----------------------------------------------------------------------
+[debug] 
+[debug] [2026-08-04T19:53:00.492Z] Object "" in "firebase.json" has unknown property: {"additionalProperty":"_commentaire"}
+[debug] [2026-08-04T19:53:00.505Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2026-08-04T19:53:00.505Z] > authorizing via signed-in user (manjiadiandoukepatricksylvain@gmail.com)
+[debug] [2026-08-04T19:53:00.506Z] [iam] checking project pronostat-8a2a8 for permissions ["firebase.projects.get","firebasehosting.sites.update"]
+[debug] [2026-08-04T19:53:00.570Z] Checked if tokens are valid: false, expires at: 1785873848116
+[debug] [2026-08-04T19:53:00.571Z] Checked if tokens are valid: false, expires at: 1785873848116
+[debug] [2026-08-04T19:53:00.571Z] > refreshing access token with scopes: []
+[debug] [2026-08-04T19:53:00.577Z] >>> [apiv2][query] POST https://www.googleapis.com/oauth2/v3/token [none]
+[debug] [2026-08-04T19:53:00.577Z] >>> [apiv2][body] POST https://www.googleapis.com/oauth2/v3/token [omitted]
+[debug] [2026-08-04T19:53:09.357Z] <<< [apiv2][status] POST https://www.googleapis.com/oauth2/v3/token 200
+[debug] [2026-08-04T19:53:09.358Z] <<< [apiv2][body] POST https://www.googleapis.com/oauth2/v3/token [omitted]
+[debug] [2026-08-04T19:53:09.388Z] >>> [apiv2][query] POST https://cloudresourcemanager.googleapis.com/v1/projects/pronostat-8a2a8:testIamPermissions [none]
+[debug] [2026-08-04T19:53:09.389Z] >>> [apiv2][(partial)header] POST https://cloudresourcemanager.googleapis.com/v1/projects/pronostat-8a2a8:testIamPermissions  x-goog-user-project=pronostat-8a2a8
+[debug] [2026-08-04T19:53:09.389Z] >>> [apiv2][body] POST https://cloudresourcemanager.googleapis.com/v1/projects/pronostat-8a2a8:testIamPermissions {"permissions":["firebase.projects.get","firebasehosting.sites.update"]}
+[debug] [2026-08-04T19:53:17.742Z] <<< [apiv2][status] POST https://cloudresourcemanager.googleapis.com/v1/projects/pronostat-8a2a8:testIamPermissions 200
+[debug] [2026-08-04T19:53:17.743Z] <<< [apiv2][body] POST https://cloudresourcemanager.googleapis.com/v1/projects/pronostat-8a2a8:testIamPermissions {"permissions":["firebase.projects.get","firebasehosting.sites.update"]}
+[debug] [2026-08-04T19:53:17.743Z] Checked if tokens are valid: true, expires at: 1785876788358
+[debug] [2026-08-04T19:53:17.744Z] Checked if tokens are valid: true, expires at: 1785876788358
+[debug] [2026-08-04T19:53:17.744Z] >>> [apiv2][query] GET https://firebase.googleapis.com/v1beta1/projects/pronostat-8a2a8 [none]
+[debug] [2026-08-04T19:53:26.589Z] <<< [apiv2][status] GET https://firebase.googleapis.com/v1beta1/projects/pronostat-8a2a8 200
+[debug] [2026-08-04T19:53:26.590Z] <<< [apiv2][body] GET https://firebase.googleapis.com/v1beta1/projects/pronostat-8a2a8 {"projectId":"pronostat-8a2a8","projectNumber":"916981986180","displayName":"PronoStat","name":"projects/pronostat-8a2a8","resources":{"hostingSite":"pronostat-8a2a8"},"state":"ACTIVE","labels":{"firebase":"enabled"},"etag":"1_01e5ccfb-0889-4189-9965-5b07267c905a"}
+[info] 
+[info] === Deploying to 'pronostat-8a2a8'...
+[info] 
+[info] i  deploying hosting 
+[debug] [2026-08-04T19:53:26.596Z] Checked if tokens are valid: true, expires at: 1785876788358
+[debug] [2026-08-04T19:53:26.596Z] Checked if tokens are valid: true, expires at: 1785876788358
+[debug] [2026-08-04T19:53:26.597Z] >>> [apiv2][query] GET https://firebasehosting.googleapis.com/v1beta1/projects/pronostat-8a2a8/sites/pronostat-8a2a8 [none]
+[debug] [2026-08-04T19:53:39.114Z] <<< [apiv2][status] GET https://firebasehosting.googleapis.com/v1beta1/projects/pronostat-8a2a8/sites/pronostat-8a2a8 200
+[debug] [2026-08-04T19:53:39.115Z] <<< [apiv2][body] GET https://firebasehosting.googleapis.com/v1beta1/projects/pronostat-8a2a8/sites/pronostat-8a2a8 {"name":"projects/pronostat-8a2a8/sites/pronostat-8a2a8","defaultUrl":"https://pronostat-8a2a8.web.app","appId":"1:916981986180:web:48ce9c53b6d14e189763d1","type":"DEFAULT_SITE"}
+[debug] [2026-08-04T19:53:39.128Z] Checked if tokens are valid: true, expires at: 1785876788358
+[debug] [2026-08-04T19:53:39.128Z] Checked if tokens are valid: true, expires at: 1785876788358
+[debug] [2026-08-04T19:53:39.130Z] >>> [apiv2][query] POST https://firebasehosting.googleapis.com/v1beta1/projects/-/sites/pronostat-8a2a8/versions [none]
+[debug] [2026-08-04T19:53:39.131Z] >>> [apiv2][body] POST https://firebasehosting.googleapis.com/v1beta1/projects/-/sites/pronostat-8a2a8/versions {"status":"CREATED","labels":{"deployment-tool":"cli-firebase"}}
+[debug] [2026-08-04T19:53:42.818Z] <<< [apiv2][status] POST https://firebasehosting.googleapis.com/v1beta1/projects/-/sites/pronostat-8a2a8/versions 200
+[debug] [2026-08-04T19:53:42.818Z] <<< [apiv2][body] POST https://firebasehosting.googleapis.com/v1beta1/projects/-/sites/pronostat-8a2a8/versions {"name":"projects/916981986180/sites/pronostat-8a2a8/versions/a155b5995a20ddd2","status":"CREATED","config":{},"labels":{"deployment-tool":"cli-firebase"}}
+[info] i  hosting[pronostat-8a2a8]: beginning deploy... 
+[info] i  hosting[pronostat-8a2a8]: found 2 files in public 
+[debug] [2026-08-04T19:53:46.969Z] [hosting] uploading with 200 concurrency
+[debug] [2026-08-04T19:53:46.983Z] Checked if tokens are valid: true, expires at: 1785876788358
+[debug] [2026-08-04T19:53:46.983Z] Checked if tokens are valid: true, expires at: 1785876788358
+[debug] [2026-08-04T19:53:46.984Z] [hosting] hash cache [cHVibGlj] stored for 2 files
+[debug] [2026-08-04T19:53:46.985Z] [hosting][hash queue][FINAL] {"max":9,"min":3,"avg":6,"active":0,"complete":2,"success":2,"errored":0,"retried":0,"total":2,"elapsed":12}
+[debug] [2026-08-04T19:53:46.985Z] >>> [apiv2][query] POST https://firebasehosting.googleapis.com/v1beta1/projects/916981986180/sites/pronostat-8a2a8/versions/a155b5995a20ddd2:populateFiles [none]
+[debug] [2026-08-04T19:53:46.985Z] >>> [apiv2][body] POST https://firebasehosting.googleapis.com/v1beta1/projects/916981986180/sites/pronostat-8a2a8/versions/a155b5995a20ddd2:populateFiles {"files":{"/index.html":"7fc2fe1374dac0cfff8bc10fb3f3530e816e43b598e00a34c5afc1af96df7996","/app-url.js":"9e5fb0aaaf110a586c406c76d29973b82ca7185675801bff8606e1a34fc0804b"}}
+[info] i  hosting: adding files to version [0/2] (0%) 
+[info] i  hosting: adding files to version [0/2] (0%) 
+[info] i  hosting: adding files to version [0/2] (0%) 
+[info] i  hosting: adding files to version [0/2] (0%) 
+[debug] [2026-08-04T19:53:56.494Z] <<< [apiv2][status] POST https://firebasehosting.googleapis.com/v1beta1/projects/916981986180/sites/pronostat-8a2a8/versions/a155b5995a20ddd2:populateFiles 200
+[debug] [2026-08-04T19:53:56.495Z] <<< [apiv2][body] POST https://firebasehosting.googleapis.com/v1beta1/projects/916981986180/sites/pronostat-8a2a8/versions/a155b5995a20ddd2:populateFiles {"uploadRequiredHashes":["9e5fb0aaaf110a586c406c76d29973b82ca7185675801bff8606e1a34fc0804b"],"uploadUrl":"https://upload-firebasehosting.googleapis.com/upload/sites/pronostat-8a2a8/versions/a155b5995a20ddd2/files"}
+[debug] [2026-08-04T19:53:56.495Z] Checked if tokens are valid: true, expires at: 1785876788358
+[debug] [2026-08-04T19:53:56.495Z] Checked if tokens are valid: true, expires at: 1785876788358
+[debug] [2026-08-04T19:53:56.496Z] >>> [apiv2][query] POST https://upload-firebasehosting.googleapis.com/upload/sites/pronostat-8a2a8/versions/a155b5995a20ddd2/files/9e5fb0aaaf110a586c406c76d29973b82ca7185675801bff8606e1a34fc0804b [none]
+[debug] [2026-08-04T19:53:56.496Z] >>> [apiv2][body] POST https://upload-firebasehosting.googleapis.com/upload/sites/pronostat-8a2a8/versions/a155b5995a20ddd2/files/9e5fb0aaaf110a586c406c76d29973b82ca7185675801bff8606e1a34fc0804b [stream]
+[debug] [2026-08-04T19:53:56.498Z] [hosting][populate queue][FINAL] {"max":9513,"min":9513,"avg":9513,"active":0,"complete":1,"success":1,"errored":0,"retried":0,"total":1,"elapsed":9514}
+[debug] [2026-08-04T19:53:56.498Z] [hosting] uploads queued: 1
+[info] i  hosting: uploading new files [0/1] (0%) 
+[info] i  hosting: uploading new files [0/1] (0%) 
+[info] i  hosting: uploading new files [0/1] (0%) 
+[info] i  hosting: uploading new files [0/1] (0%) 
+[info] i  hosting: uploading new files [0/1] (0%) 
+[debug] [2026-08-04T19:54:06.173Z] <<< [apiv2][status] POST https://upload-firebasehosting.googleapis.com/upload/sites/pronostat-8a2a8/versions/a155b5995a20ddd2/files/9e5fb0aaaf110a586c406c76d29973b82ca7185675801bff8606e1a34fc0804b 200
+[debug] [2026-08-04T19:54:06.173Z] <<< [apiv2][body] POST https://upload-firebasehosting.googleapis.com/upload/sites/pronostat-8a2a8/versions/a155b5995a20ddd2/files/9e5fb0aaaf110a586c406c76d29973b82ca7185675801bff8606e1a34fc0804b [stream]
+[debug] [2026-08-04T19:54:06.174Z] [hosting][upload queue][FINAL] {"max":9679,"min":9679,"avg":9679,"active":0,"complete":1,"success":1,"errored":0,"retried":0,"total":1,"elapsed":9679}
+[info] i  hosting: upload complete 
+[info] +  hosting[pronostat-8a2a8]: file upload complete 
+[debug] [2026-08-04T19:54:06.174Z] [hosting] deploy completed after 19230ms
+[debug] [2026-08-04T19:54:06.174Z] [
+  {
+    "config": {
+      "public": "public",
+      "ignore": [
+        "firebase.json",
+        "**/.*",
+        "**/node_modules/**"
+      ],
+      "headers": [
+        {
+          "source": "**",
+          "headers": [
+            {
+              "key": "Cache-Control",
+              "value": "no-store"
+            },
+            {
+              "key": "X-Content-Type-Options",
+              "value": "nosniff"
+            },
+            {
+              "key": "Referrer-Policy",
+              "value": "strict-origin-when-cross-origin"
+            }
+          ]
+        }
+      ],
+      "site": "pronostat-8a2a8"
+    },
+    "version": "projects/916981986180/sites/pronostat-8a2a8/versions/a155b5995a20ddd2"
+  }
+]
+[info] i  hosting[pronostat-8a2a8]: finalizing version... 
+[debug] [2026-08-04T19:54:06.176Z] Checked if tokens are valid: true, expires at: 1785876788358
+[debug] [2026-08-04T19:54:06.176Z] Checked if tokens are valid: true, expires at: 1785876788358
+[debug] [2026-08-04T19:54:06.178Z] >>> [apiv2][query] PATCH https://firebasehosting.googleapis.com/v1beta1/projects/-/sites/pronostat-8a2a8/versions/a155b5995a20ddd2 updateMask=status%2Cconfig
+[debug] [2026-08-04T19:54:06.179Z] >>> [apiv2][body] PATCH https://firebasehosting.googleapis.com/v1beta1/projects/-/sites/pronostat-8a2a8/versions/a155b5995a20ddd2 {"status":"FINALIZED","config":{"headers":[{"glob":"**","headers":{"Cache-Control":"no-store","X-Content-Type-Options":"nosniff","Referrer-Policy":"strict-origin-when-cross-origin"}}]}}
+[debug] [2026-08-04T19:54:14.967Z] <<< [apiv2][status] PATCH https://firebasehosting.googleapis.com/v1beta1/projects/-/sites/pronostat-8a2a8/versions/a155b5995a20ddd2 200
+[debug] [2026-08-04T19:54:14.967Z] <<< [apiv2][body] PATCH https://firebasehosting.googleapis.com/v1beta1/projects/-/sites/pronostat-8a2a8/versions/a155b5995a20ddd2 {"name":"projects/916981986180/sites/pronostat-8a2a8/versions/a155b5995a20ddd2","status":"FINALIZED","config":{"headers":[{"headers":{"Cache-Control":"no-store","X-Content-Type-Options":"nosniff","Referrer-Policy":"strict-origin-when-cross-origin"},"glob":"**"}]},"labels":{"deployment-tool":"cli-firebase"},"createTime":"2026-08-04T19:53:38.616625Z","createUser":{"email":"manjiadiandoukepatricksylvain@gmail.com"},"finalizeTime":"2026-08-04T19:54:12.152839Z","finalizeUser":{"email":"manjiadiandoukepatricksylvain@gmail.com"}}
+[debug] [2026-08-04T19:54:14.967Z] [hosting] finalized version for pronostat-8a2a8:[object Object]
+[info] +  hosting[pronostat-8a2a8]: version finalized 
+[info] i  hosting[pronostat-8a2a8]: releasing new version... 
+[debug] [2026-08-04T19:54:14.968Z] Checked if tokens are valid: true, expires at: 1785876788358
+[debug] [2026-08-04T19:54:14.968Z] Checked if tokens are valid: true, expires at: 1785876788358
+[debug] [2026-08-04T19:54:14.968Z] >>> [apiv2][query] POST https://firebasehosting.googleapis.com/v1beta1/projects/-/sites/pronostat-8a2a8/channels/live/releases versionName=projects%2F916981986180%2Fsites%2Fpronostat-8a2a8%2Fversions%2Fa155b5995a20ddd2
+[debug] [2026-08-04T19:54:14.968Z] >>> [apiv2][body] POST https://firebasehosting.googleapis.com/v1beta1/projects/-/sites/pronostat-8a2a8/channels/live/releases {}
+[debug] [2026-08-04T19:54:18.283Z] <<< [apiv2][status] POST https://firebasehosting.googleapis.com/v1beta1/projects/-/sites/pronostat-8a2a8/channels/live/releases 200
+[debug] [2026-08-04T19:54:18.283Z] <<< [apiv2][body] POST https://firebasehosting.googleapis.com/v1beta1/projects/-/sites/pronostat-8a2a8/channels/live/releases {"name":"projects/916981986180/sites/pronostat-8a2a8/channels/live/releases/1785873254366000","version":{"name":"projects/916981986180/sites/pronostat-8a2a8/versions/a155b5995a20ddd2","status":"FINALIZED","config":{"headers":[{"headers":{"Cache-Control":"no-store","X-Content-Type-Options":"nosniff","Referrer-Policy":"strict-origin-when-cross-origin"},"glob":"**"}]},"labels":{"deployment-tool":"cli-firebase"},"createTime":"2026-08-04T19:53:38.616625Z","createUser":{"email":"manjiadiandoukepatricksylvain@gmail.com","imageUrl":"https://lh3.googleusercontent.com/a/ACg8ocJMynCgeDkLj86xE-IHXvJwpLqo0a6GrLcbJABhHeYaPMZYSCpZ"},"finalizeTime":"2026-08-04T19:54:12.152839Z","finalizeUser":{"email":"manjiadiandoukepatricksylvain@gmail.com","imageUrl":"https://lh3.googleusercontent.com/a/ACg8ocJMynCgeDkLj86xE-IHXvJwpLqo0a6GrLcbJABhHeYaPMZYSCpZ"}},"type":"DEPLOY","releaseTime":"2026-08-04T19:54:14.366Z","releaseUser":{"email":"manjiadiandoukepatricksylvain@gmail.com","imageUrl":"https://lh3.googleusercontent.com/a/ACg8ocJMynCgeDkLj86xE-IHXvJwpLqo0a6GrLcbJABhHeYaPMZYSCpZ"}}
+[debug] [2026-08-04T19:54:18.283Z] [hosting] release: {"name":"projects/916981986180/sites/pronostat-8a2a8/channels/live/releases/1785873254366000","version":{"name":"projects/916981986180/sites/pronostat-8a2a8/versions/a155b5995a20ddd2","status":"FINALIZED","config":{"headers":[{"headers":{"Cache-Control":"no-store","X-Content-Type-Options":"nosniff","Referrer-Policy":"strict-origin-when-cross-origin"},"glob":"**"}]},"labels":{"deployment-tool":"cli-firebase"},"createTime":"2026-08-04T19:53:38.616625Z","createUser":{"email":"manjiadiandoukepatricksylvain@gmail.com","imageUrl":"https://lh3.googleusercontent.com/a/ACg8ocJMynCgeDkLj86xE-IHXvJwpLqo0a6GrLcbJABhHeYaPMZYSCpZ"},"finalizeTime":"2026-08-04T19:54:12.152839Z","finalizeUser":{"email":"manjiadiandoukepatricksylvain@gmail.com","imageUrl":"https://lh3.googleusercontent.com/a/ACg8ocJMynCgeDkLj86xE-IHXvJwpLqo0a6GrLcbJABhHeYaPMZYSCpZ"}},"type":"DEPLOY","releaseTime":"2026-08-04T19:54:14.366Z","releaseUser":{"email":"manjiadiandoukepatricksylvain@gmail.com","imageUrl":"https://lh3.googleusercontent.com/a/ACg8ocJMynCgeDkLj86xE-IHXvJwpLqo0a6GrLcbJABhHeYaPMZYSCpZ"}}
+[info] +  hosting[pronostat-8a2a8]: release complete 
+[info] 
+[info] +  Deploy complete! 
+[info] 
+[info] Project Console: https://console.firebase.google.com/project/pronostat-8a2a8/overview
+[info] Hosting URL: https://pronostat-8a2a8.web.app
+[debug] [2026-08-04T19:54:28.303Z] Error: Timed out.
+    at Timeout._onTimeout (C:\Users\pc\AppData\Roaming\npm\node_modules\firebase-tools\lib\utils.js:296:49)
+    at listOnTimeout (node:internal/timers:605:17)
+    at process.processTimers (node:internal/timers:541:7)
+[error] 
+[error] Error: An unexpected error has occurred.

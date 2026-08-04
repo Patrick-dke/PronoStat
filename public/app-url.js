@@ -13,4 +13,4 @@
  * n'est pas encore renseignée, au lieu de rediriger dans le vide.
  * ---------------------------------------------------------------------- */
 
-window.PRONOSTAT_APP_URL = "";
+window.PRONOSTAT_APP_URL = "https://pronostat-ktzrukx3p3lmzrqybqpsgb.streamlit.app";

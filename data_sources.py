@@ -921,7 +921,10 @@ class HttpClient:
             # méritent d'être vues même en production, où seuls les WARNING
             # sont conservés. Un 404 ou un 5xx sur une source de repli est en
             # revanche un fonctionnement normal : on n'en fait pas une alerte.
-            grave = resp.status_code in (400, 401, 403, 422)
+            # 429 = débit dépassé. Ce n'est pas une panne du service mais un
+            # signal d'usage : il mérite d'être vu, sous peine de chercher
+            # longtemps pourquoi une source « ne répond plus ».
+            grave = resp.status_code in (400, 401, 403, 422, 429)
             (log.warning if grave else log.info)(
                 "%s a repondu %s — %s",
                 provider or "source inconnue", resp.status_code, detail or "sans detail",
@@ -1610,38 +1613,93 @@ class TheSportsDbProvider(BaseProvider):
                 return identifiant
         return None
 
+    # Journées lues au-delà de la prochaine. Le palier gratuit plafonne à cinq
+    # matchs par appel : enchaîner quelques journées est le seul moyen d'obtenir
+    # un calendrier utilisable sans clé.
+    #
+    # Le chiffre est volontairement bas. TheSportsDB limite le débit du palier
+    # gratuit et répond 429 dès qu'on insiste : mieux vaut trois journées
+    # fiables qu'une rafale d'appels refusés. Le cache absorbe le reste.
+    ROUNDS_AHEAD = 2
+
+    @staticmethod
+    def _event_to_fixture(ev: dict) -> "Fixture | None":
+        domicile = str(ev.get("strHomeTeam") or "").strip()
+        exterieur = str(ev.get("strAwayTeam") or "").strip()
+        if not domicile or not exterieur:
+            return None
+        jour = ev.get("dateEvent")
+        heure = (ev.get("strTime") or "00:00:00")[:8]
+        return Fixture(
+            home=domicile,
+            away=exterieur,
+            starts_at=_parse_dt(f"{jour}T{heure}Z") if jour else None,
+        )
+
     def fixtures(self, comp: Competition) -> list[Fixture]:
         """Prochaines rencontres. Repli gratuit quand aucune clé de cotes n'est posée.
 
-        Le palier gratuit ne renvoie qu'une poignée de matchs par ligue — bien
-        moins que le calendrier des bookmakers. C'est peu, mais c'est mieux
-        qu'une liste vide, et cela ne coûte ni clé ni quota.
+        `eventsnextleague` ne rend qu'un seul match — trop peu pour choisir.
+        On lui demande donc surtout *quelle journée* vient, puis on lit cette
+        journée et les suivantes via `eventsround`, qui en rend cinq à chaque
+        fois. Le calendrier devient utilisable sans clé ni quota.
+
+        Les rencontres déjà jouées sont écartées : une journée en cours contient
+        des matchs passés, qu'il serait absurde de proposer à la simulation.
         """
         if not self.handles(comp) or not comp.sportsdb_league:
             return []
         identifiant = self._league_id(comp.sportsdb_league, comp.scope)
         if not identifiant:
             return []
+
         res = self.http.get_json(
             f"{self.BASE}/eventsnextleague.php",
             params={"id": identifiant},
             ttl=cfg.TTL.events,
             scope=comp.scope,
         )
-        if not res:
+        prochains = ((res[0] if res else None) or {}).get("events") or []
+        if not prochains:
             return []
+
         sorties: list[Fixture] = []
-        for ev in ((res[0] or {}).get("events") or []):
-            domicile = str(ev.get("strHomeTeam") or "").strip()
-            exterieur = str(ev.get("strAwayTeam") or "").strip()
-            if not domicile or not exterieur:
+        for ev in prochains:
+            trouve = self._event_to_fixture(ev)
+            if trouve:
+                sorties.append(trouve)
+
+        # La journée du prochain match sert de point de départ.
+        try:
+            journee = int(prochains[0].get("intRound") or 0)
+        except (TypeError, ValueError):
+            journee = 0
+        saison = str(prochains[0].get("strSeason") or "").strip()
+        if not journee or not saison:
+            return sorties
+
+        maintenant = datetime.now(UTC)
+        for suivante in range(journee, journee + self.ROUNDS_AHEAD + 1):
+            res = self.http.get_json(
+                f"{self.BASE}/eventsround.php",
+                params={"id": identifiant, "r": suivante, "s": saison},
+                ttl=cfg.TTL.events,
+                scope=comp.scope,
+            )
+            if not res:
+                # Débit dépassé : insister ne ferait qu'aggraver le blocage.
+                # On garde ce qui a déjà été récolté.
+                if "429" in (self.http.last_error or ""):
+                    log.info("thesportsdb : débit dépassé, arrêt à la journée %d", suivante)
+                    break
                 continue
-            jour, heure = ev.get("dateEvent"), (ev.get("strTime") or "00:00:00")[:8]
-            sorties.append(Fixture(
-                home=domicile,
-                away=exterieur,
-                starts_at=_parse_dt(f"{jour}T{heure}Z") if jour else None,
-            ))
+            for ev in (res[0] or {}).get("events") or []:
+                trouve = self._event_to_fixture(ev)
+                if trouve is None:
+                    continue
+                if trouve.starts_at is not None and trouve.starts_at < maintenant:
+                    continue          # déjà joué : hors sujet pour une simulation
+                sorties.append(trouve)
         return sorties
 
     def participants(self, comp: Competition) -> tuple[list[str], Provenance] | None:

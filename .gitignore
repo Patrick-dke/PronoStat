@@ -5,6 +5,11 @@
 # Cache local (cotes, forme, effectifs, quotas, historique)
 .cache/
 
+# Artefacts du deploiement Firebase (regeneres a chaque publication)
+.firebase/
+firebase-debug.log
+*-debug.log
+
 # Python
 __pycache__/
 *.py[cod]

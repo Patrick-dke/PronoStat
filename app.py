@@ -350,6 +350,21 @@ def vs_row(label: str, left: str, right: str, left_better: bool | None) -> str:
 def render_header() -> None:
     hub = get_hub()
     chips = []
+
+    # État réel de la source de cotes, lisible sans ouvrir quoi que ce soit.
+    # Un compteur de quota intact peut vouloir dire deux choses opposées :
+    # « aucune requête n'a encore été nécessaire » ou « la source ne
+    # fonctionne pas ». Le distinguer d'un coup d'œil évite de chercher.
+    fournisseur = next(
+        (p for p in hub.providers if p.__class__.__name__ == "TheOddsApiProvider"), None
+    )
+    if fournisseur is not None and not fournisseur.enabled:
+        chips.append(badge(
+            "Cotes désactivées : clé absente" if not getattr(fournisseur, "api_key", "")
+            else "Cotes désactivées : source coupée",
+            "warn",
+        ))
+
     for status in hub.quota_status():
         if status.exhausted:
             kind, txt = "warn", f"{status.label} : quota épuisé"
@@ -1447,8 +1462,12 @@ def render_config_diagnostic() -> None:
     comporte comme si tout allait bien. Aucune valeur de clé n'y figure,
     uniquement des noms et des longueurs.
     """
-    if cfg.KEYS.odds_api:
-        return          # une clé de cotes est active : rien à diagnostiquer
+    fournisseur = next(
+        (p for p in get_hub().providers if p.__class__.__name__ == "TheOddsApiProvider"),
+        None,
+    )
+    if fournisseur is not None and fournisseur.enabled:
+        return          # la source de cotes est opérationnelle : rien à expliquer
 
     rapport = cfg.secrets_report()
     with st.expander("🔑  Aucune clé de cotes active — voir pourquoi", expanded=False):

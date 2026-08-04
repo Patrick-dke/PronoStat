@@ -243,6 +243,99 @@ class TestFixtures:
         assert provider.fixtures(comp("football", "premier_league")) == []
 
 
+class TestFixtureMerge:
+    """Fusion des calendriers : les sources ne nomment pas les clubs pareil."""
+
+    class _Source:
+        def __init__(self, name, matchs):
+            self.name, self._matchs = name, matchs
+
+        def fixtures(self, _comp):
+            return self._matchs
+
+    @staticmethod
+    def _hub(tmp_path, monkeypatch, sources):
+        monkeypatch.setattr(cfg, "HTTP_CACHE_FILE", tmp_path / "c.json")
+        monkeypatch.setattr(cfg, "QUOTA_FILE", tmp_path / "q.json")
+        monkeypatch.setattr(cfg, "ODDS_HISTORY_FILE", tmp_path / "o.json")
+        hub = ds.DataHub()
+        hub.providers = sources
+        return hub
+
+    def test_same_match_under_two_names_appears_once(self, tmp_path, monkeypatch):
+        quand = datetime(2026, 8, 28, 18, 30, tzinfo=UTC)
+        hub = self._hub(tmp_path, monkeypatch, [
+            self._Source("cotes", [ds.Fixture("Bayern Munich", "VfB Stuttgart", quand)]),
+            self._Source("gratuite", [ds.Fixture("Bayern Munich", "Stuttgart", quand)]),
+        ])
+        got = hub.fixtures(comp("football", "bundesliga"))
+        assert len(got) == 1
+        assert got[0].away == "VfB Stuttgart", "le libellé de la source prioritaire est conservé"
+
+    def test_similar_names_on_another_date_stay_distinct(self, tmp_path, monkeypatch):
+        """Un match aller et un match retour ne doivent pas fusionner."""
+        aller = datetime(2026, 8, 28, 18, 30, tzinfo=UTC)
+        retour = datetime(2026, 12, 12, 18, 30, tzinfo=UTC)
+        hub = self._hub(tmp_path, monkeypatch, [
+            self._Source("a", [ds.Fixture("Bayern Munich", "VfB Stuttgart", aller)]),
+            self._Source("b", [ds.Fixture("Bayern Munich", "VfB Stuttgart", retour)]),
+        ])
+        assert len(hub.fixtures(comp("football", "bundesliga"))) == 2
+
+    def test_a_failing_source_does_not_block_the_others(self, tmp_path, monkeypatch):
+        class Cassee:
+            name = "cassee"
+            def fixtures(self, _comp):
+                raise RuntimeError("panne")
+
+        quand = datetime(2026, 8, 28, 18, 30, tzinfo=UTC)
+        hub = self._hub(tmp_path, monkeypatch, [
+            Cassee(),
+            self._Source("saine", [ds.Fixture("Bayern Munich", "VfB Stuttgart", quand)]),
+        ])
+        assert len(hub.fixtures(comp("football", "bundesliga"))) == 1
+
+
+class TestNhlFixtures:
+    """Le calendrier NHL est gratuit et sans clé : il doit vivre sans cotes."""
+
+    @pytest.fixture
+    def provider(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(cfg, "HTTP_CACHE_FILE", tmp_path / "c.json")
+        monkeypatch.setattr(cfg, "QUOTA_FILE", tmp_path / "q.json")
+        http = ds.HttpClient(ds.CacheStore(tmp_path / "c.json"), ds.QuotaTracker(tmp_path / "q.json"))
+        prov = ds.NhlApiProvider(http)
+        prov.enabled = True
+        return prov
+
+    @staticmethod
+    def _equipe(ville: str, surnom: str) -> dict:
+        return {"placeName": {"default": ville}, "commonName": {"default": surnom}}
+
+    def test_city_and_nickname_are_joined(self, provider, monkeypatch):
+        """Le calendrier sépare ville et surnom ; l'effectif attend le nom complet."""
+        monkeypatch.setattr(provider.http, "get_json", lambda *_a, **_k: ({"gameWeek": [{"games": [{
+            "gameType": 2, "startTimeUTC": "2026-09-29T21:00:00Z",
+            "homeTeam": self._equipe("Carolina", "Hurricanes"),
+            "awayTeam": self._equipe("Florida", "Panthers"),
+        }]}]}, time.time(), False))
+        got = provider.fixtures(comp("hockey", "nhl"))
+        assert [(f.home, f.away) for f in got] == [("Carolina Hurricanes", "Florida Panthers")]
+
+    def test_preseason_games_are_excluded(self, provider, monkeypatch):
+        """Un match de préparation fausserait autant l'analyse que le pronostic."""
+        monkeypatch.setattr(provider.http, "get_json", lambda *_a, **_k: ({"gameWeek": [{"games": [
+            {"gameType": 1, "startTimeUTC": "2026-09-20T21:00:00Z",
+             "homeTeam": self._equipe("Boston", "Bruins"),
+             "awayTeam": self._equipe("New York", "Rangers")},
+            {"gameType": 2, "startTimeUTC": "2026-09-29T21:00:00Z",
+             "homeTeam": self._equipe("Carolina", "Hurricanes"),
+             "awayTeam": self._equipe("Florida", "Panthers")},
+        ]}]}, time.time(), False))
+        got = provider.fixtures(comp("hockey", "nhl"))
+        assert [f.home for f in got] == ["Carolina Hurricanes"]
+
+
 # ==========================================================================
 # Cotes buteur
 #

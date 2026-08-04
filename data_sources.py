@@ -1590,6 +1590,60 @@ class TheSportsDbProvider(BaseProvider):
         ]
         return (names, ts, from_cache) if names else None
 
+    def _league_id(self, league_name: str, scope: str) -> str | None:
+        """Identifiant de la ligue, lu dans la réponse « toutes équipes ».
+
+        Chaque équipe porte son `idLeague` : inutile d'interroger un endpoint
+        supplémentaire, la réponse est déjà en cache pour les effectifs.
+        """
+        res = self.http.get_json(
+            f"{self.BASE}/search_all_teams.php",
+            params={"l": league_name},
+            ttl=cfg.TTL.catalog,
+            scope=scope,
+        )
+        if not res:
+            return None
+        for equipe in ((res[0] or {}).get("teams") or []):
+            identifiant = str(equipe.get("idLeague") or "").strip()
+            if identifiant:
+                return identifiant
+        return None
+
+    def fixtures(self, comp: Competition) -> list[Fixture]:
+        """Prochaines rencontres. Repli gratuit quand aucune clé de cotes n'est posée.
+
+        Le palier gratuit ne renvoie qu'une poignée de matchs par ligue — bien
+        moins que le calendrier des bookmakers. C'est peu, mais c'est mieux
+        qu'une liste vide, et cela ne coûte ni clé ni quota.
+        """
+        if not self.handles(comp) or not comp.sportsdb_league:
+            return []
+        identifiant = self._league_id(comp.sportsdb_league, comp.scope)
+        if not identifiant:
+            return []
+        res = self.http.get_json(
+            f"{self.BASE}/eventsnextleague.php",
+            params={"id": identifiant},
+            ttl=cfg.TTL.events,
+            scope=comp.scope,
+        )
+        if not res:
+            return []
+        sorties: list[Fixture] = []
+        for ev in ((res[0] or {}).get("events") or []):
+            domicile = str(ev.get("strHomeTeam") or "").strip()
+            exterieur = str(ev.get("strAwayTeam") or "").strip()
+            if not domicile or not exterieur:
+                continue
+            jour, heure = ev.get("dateEvent"), (ev.get("strTime") or "00:00:00")[:8]
+            sorties.append(Fixture(
+                home=domicile,
+                away=exterieur,
+                starts_at=_parse_dt(f"{jour}T{heure}Z") if jour else None,
+            ))
+        return sorties
+
     def participants(self, comp: Competition) -> tuple[list[str], Provenance] | None:
         if not self.handles(comp):
             return None
@@ -2250,6 +2304,50 @@ class NhlApiProvider(BaseProvider):
     def _row_abbrev(row: dict) -> str:
         abbrev = row.get("teamAbbrev")
         return (abbrev or {}).get("default", "") if isinstance(abbrev, dict) else str(abbrev or "")
+
+    @staticmethod
+    def _full_name(side: dict) -> str:
+        """« Carolina » + « Hurricanes » → « Carolina Hurricanes ».
+
+        Le calendrier officiel sépare ville et surnom, là où le classement
+        donne le nom complet. Il faut les réunir, sinon les affiches ne se
+        rapprochent pas des effectifs et le match reste introuvable.
+        """
+        def texte(champ: str) -> str:
+            valeur = side.get(champ)
+            if isinstance(valeur, dict):
+                return str(valeur.get("default") or "").strip()
+            return str(valeur or "").strip()
+
+        complet = f"{texte('placeName')} {texte('commonName')}".strip()
+        return complet or texte("abbrev")
+
+    def fixtures(self, comp: Competition) -> list[Fixture]:
+        """Calendrier officiel à venir. Gratuit, sans clé, sans quota."""
+        if not self.handles(comp):
+            return []
+        res = self.http.get_json(
+            f"{self.BASE}/schedule/now", ttl=cfg.TTL.events, scope=comp.scope
+        )
+        if not res:
+            return []
+        sorties: list[Fixture] = []
+        for jour in (res[0] or {}).get("gameWeek") or []:
+            for partie in jour.get("games") or []:
+                # gameType 1 = matchs de préparation : ils ne comptent pas et
+                # fausseraient l'analyse comme le pronostic.
+                if partie.get("gameType") == 1:
+                    continue
+                domicile = self._full_name(partie.get("homeTeam") or {})
+                exterieur = self._full_name(partie.get("awayTeam") or {})
+                if not domicile or not exterieur:
+                    continue
+                sorties.append(Fixture(
+                    home=domicile,
+                    away=exterieur,
+                    starts_at=_parse_dt(partie.get("startTimeUTC")),
+                ))
+        return sorties
 
     def participants(self, comp: Competition) -> tuple[list[str], Provenance] | None:
         if not self.handles(comp):
@@ -3495,22 +3593,64 @@ class DataHub:
         return None
 
     def fixtures(self, comp: Competition) -> list[Fixture]:
-        """Affiches réellement programmées, ou liste vide si on ne sait pas.
+        """Prochaines rencontres, fusionnées entre toutes les sources qui en ont.
 
         L'effectif d'une compétition est fusionné entre plusieurs sources et
         plusieurs saisons : il contient donc parfois des équipes qui n'y jouent
-        plus, ou des adversaires de coupe venus d'une autre division. Le
-        calendrier des bookmakers, lui, ne décrit que des matchs qui auront
-        vraiment lieu — et c'est le seul périmètre où des cotes existent.
+        plus, ou des adversaires de coupe venus d'une autre division. Un
+        calendrier, lui, ne décrit que des matchs qui auront vraiment lieu.
+
+        Ordre des sources, et pourquoi :
+
+        1. **The Odds API** en premier. Son calendrier est le plus complet, et
+           surtout c'est le seul périmètre où des cotes existent réellement.
+        2. **API NHL** et **TheSportsDB** ensuite. Gratuites et sans clé, elles
+           font vivre la fonction même quand aucune clé de cotes n'est posée —
+           l'analyse repose alors sur les seules statistiques.
+
+        Les doublons sont écartés : un même match publié par deux sources
+        n'apparaît qu'une fois, sous le libellé de la source la plus fiable.
         """
+        fusion: list[Fixture] = []
+
+        def deja_vu(candidat: Fixture) -> bool:
+            """Le même match, sous un autre nom ?
+
+            Les sources ne nomment pas les clubs pareil : « Alavés » chez l'une,
+            « Deportivo Alavés » chez l'autre ; « Stuttgart » contre « VfB
+            Stuttgart ». Une comparaison exacte laisserait donc passer des
+            doublons, et l'utilisateur verrait deux fois la même affiche.
+            La date sert de garde-fou : deux clubs aux noms proches qui jouent
+            un autre jour restent bien deux rencontres distinctes.
+            """
+            for garde in fusion:
+                if (
+                    candidat.starts_at and garde.starts_at
+                    and candidat.starts_at.date() != garde.starts_at.date()
+                ):
+                    continue
+                if (
+                    name_similarity(candidat.home, garde.home) >= 0.72
+                    and name_similarity(candidat.away, garde.away) >= 0.72
+                ):
+                    return True
+            return False
+
         for provider in self.providers:
-            if isinstance(provider, TheOddsApiProvider):
-                try:
-                    return provider.fixtures(comp)
-                except Exception:  # une panne de calendrier ne doit rien bloquer
-                    log.info("calendrier indisponible pour %s", comp.label)
-                    return []
-        return []
+            if not hasattr(provider, "fixtures"):
+                continue
+            try:
+                trouvees = provider.fixtures(comp) or []
+            except Exception:  # une source défaillante n'en bloque pas d'autres
+                log.info("calendrier indisponible via %s pour %s", provider.name, comp.label)
+                continue
+            for match in trouvees:
+                if not deja_vu(match):
+                    fusion.append(match)
+        return sorted(
+            fusion,
+            key=lambda f: (f.starts_at is None, f.starts_at or datetime.max.replace(tzinfo=UTC)),
+        )
 
     # -- collecte pour un match -------------------------------------------
     def collect(

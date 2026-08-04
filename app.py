@@ -492,8 +492,9 @@ def render_controls() -> tuple[Competition | None, str | None, str | None, bool]
                 use_container_width=True,
             )
         st.caption(
-            "Ces rencontres sont celles que les bookmakers cotent aujourd'hui : "
-            "ce sont les seules pour lesquelles des cotes réelles existent."
+            "Rencontres réellement au calendrier. Choisir ici plutôt que de composer "
+            "librement deux équipes évite les affiches qui n'existent pas — les seules "
+            "à pouvoir porter des cotes sont celles programmées."
         )
         return comp, home, away, launch
 

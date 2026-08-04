@@ -121,8 +121,11 @@ echo   IMPORTANT : ne cochez NI "Add a README file"
 echo               NI "Add .gitignore" NI "Choose a license".
 echo               Le depot doit rester vide.
 echo.
+echo   La case "Private" est deja cochee : votre code restera
+echo   invisible pour les autres. Ne la decochez pas.
+echo.
 pause
-start "" "https://github.com/new?name=pronostat&description=Agent+d+analyse+sportive+autonome&visibility=public"
+start "" "https://github.com/new?name=pronostat&description=Agent+d+analyse+sportive+autonome&visibility=private"
 echo.
 echo   ^>^>^> Revenez ici une fois le depot cree sur GitHub.
 echo.
@@ -185,9 +188,18 @@ echo.
 echo   J'ouvre Streamlit Cloud. Marche a suivre :
 echo.
 echo     1. "Continue with GitHub" puis autorisez l'acces
-echo     2. Bouton "Create app" ^(ou "New app"^)
-echo     3. Choisissez "Deploy a public app from GitHub"
-echo     4. Renseignez exactement :
+echo.
+echo     2. DEPOT PRIVE - autorisation supplementaire obligatoire.
+echo        Sans elle, votre depot n'apparaitra pas dans la liste.
+echo        Cliquez sur votre nom en haut a droite ^> "Settings"
+echo        ^> "Linked accounts" ^> sous "Source control",
+echo        cliquez "Authorize" et acceptez sur GitHub.
+echo        ^(Streamlit cree une cle de lecture seule ; GitHub
+echo         vous enverra un e-mail de notification, c'est normal.^)
+echo.
+echo     3. Bouton "Create app" ^(ou "New app"^)
+echo     4. Choisissez le deploiement depuis GitHub, puis
+echo        renseignez exactement :
 echo.
 echo          Repository   : !GHUSER!/pronostat
 echo          Branch       : main
@@ -202,6 +214,11 @@ echo.
 echo   Le premier demarrage prend 2 a 5 minutes.
 echo   Vous obtiendrez une adresse en .streamlit.app,
 echo   utilisable sur ordinateur, Android, iPhone et tablette.
+echo.
+echo   L'application heritera de la confidentialite du depot :
+echo   elle sera PRIVEE. Sur le telephone, connectez-vous avec
+echo   la meme adresse e-mail que votre compte Streamlit.
+echo   Pour l'ouvrir a tous : bouton "Share" ^> passer en Public.
 echo.
 pause
 start "" "https://share.streamlit.io/"

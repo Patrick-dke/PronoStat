@@ -391,8 +391,8 @@ se fait par navigateur.
 Le détail, si vous préférez la main :
 
 **1. Publier sur GitHub.** Créez un dépôt vide sur
-[github.com/new](https://github.com/new) — nommez-le `pronostat`, sans README
-ni .gitignore — puis :
+[github.com/new](https://github.com/new) — nommez-le `pronostat`, cochez
+**Private**, sans README ni .gitignore — puis :
 
 ```bash
 git remote add origin https://github.com/VOTRE-COMPTE/pronostat.git
@@ -403,8 +403,17 @@ git push -u origin main
 Git Credential Manager, livré avec Git pour Windows, gère l'autorisation. Un
 jeton d'accès personnel reste possible mais n'est plus nécessaire.
 
-**2. Déployer.** Sur [share.streamlit.io](https://share.streamlit.io),
-connectez-vous avec GitHub → **Create app** → dépôt `pronostat`, branche `main`,
+**2. Autoriser Streamlit à lire les dépôts privés.** Sur
+[share.streamlit.io](https://share.streamlit.io), connectez-vous avec GitHub,
+puis votre nom en haut à droite → **Settings** → **Linked accounts** → sous
+*Source control*, **Authorize**.
+
+> Les permissions GitHub par défaut ne couvrent que les dépôts publics. Sans
+> cette étape, `pronostat` n'apparaîtra pas dans la liste des dépôts
+> déployables. Streamlit crée une clé de déploiement en lecture seule et GitHub
+> vous en notifie par e-mail — comportement normal et documenté.
+
+**3. Déployer.** **Create app** → dépôt `pronostat`, branche `main`,
 fichier `app.py`.
 
 > ⚠️ **Ouvrez « Advanced settings » et choisissez Python 3.12 AVANT de cliquer
@@ -415,7 +424,13 @@ fichier `app.py`.
 Vous obtenez une URL en `.streamlit.app`, utilisable depuis n'importe quel
 appareil.
 
-**3. Ajouter les clés.** **Settings → Secrets** : collez le contenu de
+L'application **hérite de la confidentialité du dépôt** : privée, donc réservée
+aux adresses e-mail que vous autorisez via le bouton *Share* — à commencer par
+la vôtre, avec laquelle il faudra se connecter sur le téléphone. Le bouton
+*Share* permet aussi de la passer en public sans jamais exposer le code. Le plan
+gratuit autorise **une seule application privée à la fois**.
+
+**4. Ajouter les clés.** **Settings → Secrets** : collez le contenu de
 `.streamlit/secrets.toml.example` complété, plus
 `PRONOSTAT_ENV = "production"`. Aucun redéploiement nécessaire. Le pas-à-pas
 complet est dans `APRES-DEPLOIEMENT.md`.

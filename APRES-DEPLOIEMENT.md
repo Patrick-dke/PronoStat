@@ -97,6 +97,30 @@ Dites-le moi si vous voulez que je m'occupe de l'une des deux dernières.
 
 ## Ce qui n'est jamais publié
 
-`.env`, `.streamlit/secrets.toml`, `.venv/`, les caches — tous exclus par `.gitignore`. Vérifié fichier par fichier : aucune clé ne figure dans les 39 fichiers envoyés sur GitHub.
+`.env`, `.streamlit/secrets.toml`, `.venv/`, les caches — tous exclus par `.gitignore`. Vérifié fichier par fichier : aucune clé ne figure dans les 41 fichiers envoyés sur GitHub.
 
-**Le dépôt étant public**, votre adresse e-mail apparaît dans l'historique des commits (c'est le fonctionnement normal de git, et c'est ce qui rattache les commits à votre profil GitHub). Pour la masquer : GitHub → Settings → Emails → cocher *Keep my email addresses private*, puis utiliser l'adresse `…@users.noreply.github.com` qui y est indiquée.
+**Le dépôt est privé** : personne d'autre que vous ne voit le code, et votre adresse e-mail dans l'historique des commits n'est visible que de vous. Rien à masquer.
+
+---
+
+## Dépôt privé : les trois conséquences
+
+**1. Une autorisation GitHub supplémentaire est obligatoire.** Les permissions par défaut de Streamlit ne couvrent que les dépôts publics : sans cette étape, `pronostat` n'apparaîtra tout simplement pas dans la liste au moment de créer l'application.
+
+Votre nom en haut à droite → **Settings** → **Linked accounts** → sous *Source control*, **Authorize**. Streamlit crée alors une clé de déploiement en lecture seule ; GitHub vous notifie par e-mail, c'est le fonctionnement normal.
+
+**2. L'application est privée elle aussi.** Elle hérite de la confidentialité du dépôt. Concrètement, sur le téléphone il faudra se connecter avec la même adresse e-mail que votre compte Streamlit — sinon la page affiche un refus d'accès.
+
+Deux réglages depuis le bouton **Share** de l'application :
+
+| Vous voulez | À faire |
+|---|---|
+| Garder pour vous | Ne rien changer |
+| Inviter quelques personnes | *Share* → ajouter leurs adresses e-mail |
+| Ouvrir à tous | *Share* → passer l'application en **Public** |
+
+Le dépôt reste privé dans les trois cas : rendre l'application publique n'expose pas le code.
+
+Garder l'application privée a un intérêt concret au-delà de la confidentialité : votre quota gratuit de cotes (≈ 500 requêtes/mois) ne peut pas être consommé par des inconnus.
+
+**3. Une seule application privée à la fois.** C'est la limite du plan gratuit. Pour en déployer une seconde, il faudrait rendre celle-ci publique ou la supprimer.

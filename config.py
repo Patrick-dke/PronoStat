@@ -620,6 +620,11 @@ class Ttl:
 
 TTL = Ttl()
 
+# Écart relatif toléré autour de la médiane pour qu'une cote soit jugée
+# « proche du consensus ». 6 % laisse passer la dispersion normale entre
+# opérateurs sérieux, et écarte l'offre promotionnelle isolée.
+ODDS_CONSENSUS_TOLERANCE = _env_float("ODDS_CONSENSUS_TOLERANCE", 0.06)
+
 HTTP_TIMEOUT = _env_float("HTTP_TIMEOUT", 12.0)
 # Reprises après une erreur réseau. Une coupure passagère suffisait à faire
 # perdre les cotes d'un match, et donc à effondrer la confiance de l'analyse.

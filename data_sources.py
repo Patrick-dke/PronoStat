@@ -800,6 +800,48 @@ class QuotaTracker:
         return True if st is None else st.remaining >= cost
 
 
+def consensus_price(prices: "list[float]") -> float:
+    """Cote de consensus, résistante aux bookmakers isolés.
+
+    Une moyenne brute laisse un seul opérateur atypique déplacer le
+    consensus : sur dix bookmakers à 2,00 et un à 5,00, la moyenne monte à
+    2,27 alors que le marché dit clairement 2,00. Comme cette cote sert
+    ensuite d'ancrage à toute la méthode no-vig, l'erreur se propage à
+    chaque probabilité affichée.
+
+    On procède donc en deux temps :
+
+    1. **La médiane** donne le centre du marché. Elle ne bouge pas si un
+       opérateur s'écarte, quelle que soit l'ampleur de son écart.
+    2. **On ne retient que les cotes proches de ce centre**, à une tolérance
+       relative près — relative, car un écart de 0,10 est énorme sur une cote
+       à 1,20 et négligeable sur une cote à 12,00. La moyenne de ces cotes-là
+       est plus fine que la médiane seule, tout en restant insensible aux
+       valeurs aberrantes.
+
+    Si l'écartement laisse trop peu de cotes — marché très dispersé, ou deux
+    opérateurs seulement — on s'en tient à la médiane, qui reste défendable.
+    """
+    valeurs = sorted(p for p in prices if p and p > 1.0)
+    if not valeurs:
+        return 0.0
+    if len(valeurs) <= 2:
+        return round(sum(valeurs) / len(valeurs), 4)
+
+    milieu = len(valeurs) // 2
+    mediane = (
+        valeurs[milieu] if len(valeurs) % 2
+        else (valeurs[milieu - 1] + valeurs[milieu]) / 2
+    )
+    tolerance = cfg.ODDS_CONSENSUS_TOLERANCE
+    proches = [p for p in valeurs if abs(p - mediane) <= mediane * tolerance]
+    # Moins de la moitié des opérateurs d'accord : le marché est trop disperse
+    # pour qu'une moyenne ait un sens, la médiane fait mieux le travail.
+    if len(proches) * 2 < len(valeurs):
+        return round(mediane, 4)
+    return round(sum(proches) / len(proches), 4)
+
+
 def _api_error_message(resp: "requests.Response", limite: int = 160) -> str:
     """Extrait l'explication d'une réponse en erreur, si elle en porte une.
 
@@ -1463,7 +1505,7 @@ class TheOddsApiProvider(BaseProvider):
                         spreads_acc.setdefault(line, {}).setdefault(label, []).append(price)
 
         def mean_map(acc: dict) -> dict:
-            return {k: round(sum(v) / len(v), 4) for k, v in acc.items() if v}
+            return {k: consensus_price(v) for k, v in acc.items() if v}
 
         return OddsSnapshot(
             home_team=row.get("home_team", ""),

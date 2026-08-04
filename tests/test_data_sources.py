@@ -855,3 +855,35 @@ class TestHistory:
         rows = hist.all()
         assert len(rows) == 3 and rows[-1]["home"] == "A4"
         assert "ts" in rows[0]
+
+
+class TestConsensusPrice:
+    """Cette cote sert d'ancrage à toute la méthode no-vig : un bookmaker
+    isolé ne doit pas pouvoir déplacer l'ensemble des probabilités."""
+
+    def test_an_isolated_bookmaker_does_not_move_the_consensus(self):
+        prix = [2.0] * 10 + [5.0]
+        assert sum(prix) / len(prix) == pytest.approx(2.273, abs=0.01)
+        assert ds.consensus_price(prix) == pytest.approx(2.0)
+
+    def test_normal_dispersion_is_averaged(self):
+        """Des opérateurs sérieux ne s'accordent jamais à la décimale près."""
+        assert ds.consensus_price([1.95, 2.00, 2.02, 2.05, 1.98]) == pytest.approx(2.0, abs=0.01)
+
+    def test_tolerance_is_relative_not_absolute(self):
+        """0,10 d'écart est énorme sur 1,20 et négligeable sur 12,00."""
+        serre = ds.consensus_price([1.20, 1.21, 1.22, 3.00])
+        assert serre == pytest.approx(1.21, abs=0.01), "3.00 doit être écarté"
+        large = ds.consensus_price([12.0, 12.2, 12.5, 30.0])
+        assert 12.0 <= large <= 12.5, "30.0 doit être écarté, pas 12.5"
+
+    def test_a_very_split_market_falls_back_to_the_median(self):
+        assert ds.consensus_price([1.5, 2.0, 3.0, 5.0, 9.0]) == pytest.approx(3.0)
+
+    def test_one_or_two_bookmakers_are_kept_as_is(self):
+        assert ds.consensus_price([3.3]) == pytest.approx(3.3)
+        assert ds.consensus_price([2.0, 2.6]) == pytest.approx(2.3)
+
+    def test_invalid_prices_are_ignored(self):
+        assert ds.consensus_price([0.0, 1.0, -3.0, 2.0, 2.0]) == pytest.approx(2.0)
+        assert ds.consensus_price([]) == 0.0

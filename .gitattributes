@@ -1,6 +1,12 @@
 # Normalisation des fins de ligne : LF dans le depot, quel que soit le systeme
 * text=auto eol=lf
 
+# Exception : les scripts Windows doivent rester en CRLF. cmd.exe lit un .bat
+# octet par octet et peut echouer sur les blocs multilignes et les etiquettes
+# goto si le fichier n'a que des LF.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
 # Fichiers binaires : ne jamais convertir
 *.png binary
 *.jpg binary

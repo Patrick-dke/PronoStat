@@ -20,6 +20,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
 
 import config as cfg
+from . import storage
 
 UTC = timezone.utc
 
@@ -70,28 +71,31 @@ def _match_id(sport: str, competition: str, home: str, away: str) -> str:
 class PredictionLedger:
     """Stockage local, simple et lisible, des analyses et de leurs résultats."""
 
-    def __init__(self, path=None, limit: int = 2000):
+    def __init__(self, path=None, limit: int = 2000, store=None):
         self.path = str(path or LEDGER_FILE)
         self.limit = limit
         self._lock = threading.Lock()
+        # Un chemin explicite signale un usage local — tests, ou machine de
+        # développement : on n'ira pas chercher une base externe. Sans chemin,
+        # on prend le meilleur stockage disponible.
+        if store is not None:
+            self._store = store
+        elif path is not None:
+            self._store = storage.LocalFileStore(self.path, limit)
+        else:
+            self._store = storage.make_store(self.path, limit)
 
-    # -- accès disque ---------------------------------------------------
+    @property
+    def storage_label(self) -> str:
+        """Où le journal est conservé, pour l'afficher à l'utilisateur."""
+        return self._store.label
+
+    # -- accès au stockage ----------------------------------------------
     def _load(self) -> list[dict]:
-        try:
-            with open(self.path, "r", encoding="utf-8") as fh:
-                data = json.load(fh)
-            return data if isinstance(data, list) else []
-        except (OSError, json.JSONDecodeError):
-            return []
+        return self._store.load()
 
     def _save(self, rows: list[dict]) -> None:
-        tmp = f"{self.path}.tmp"
-        try:
-            with open(tmp, "w", encoding="utf-8") as fh:
-                json.dump(rows[-self.limit :], fh, ensure_ascii=False)
-            os.replace(tmp, self.path)
-        except OSError:
-            pass
+        self._store.save(rows)
 
     # -- écriture -------------------------------------------------------
     def record(self, decision, prediction, competition_label: str) -> LedgerEntry:

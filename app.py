@@ -1409,6 +1409,21 @@ def render_history() -> None:
                 unsafe_allow_html=True,
             )
 
+        # Où vit ce journal conditionne la valeur de tout ce qui suit : sur un
+        # disque éphémère, le taux de réussite repart de zéro à chaque
+        # redémarrage et n'atteint jamais le seuil de signification.
+        ou = ledger.storage_label
+        st.caption(
+            f"Journal conservé dans **{ou}**."
+            + (
+                "  Il survit aux redémarrages de l'application."
+                if ou == "Firestore"
+                else "  ⚠️ Le disque de l'hébergeur est effacé à chaque redémarrage :"
+                " ces analyses seront perdues, et le taux de réussite ne pourra pas"
+                " s'accumuler. Voir FIRESTORE.md pour le rendre permanent."
+            )
+        )
+
         if not report.is_meaningful:
             st.caption(
                 f"{report.resolved} résultat(s) connu(s) sur {len(entries)} analyses. "

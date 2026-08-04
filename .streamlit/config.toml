@@ -8,7 +8,10 @@ font = "sans serif"
 
 [server]
 headless = true
-runOnSave = true
+# Faux volontairement : en ligne, le rechargement automatique peut se
+# déclencher en boucle si l'application écrit son cache dans son propre
+# dossier. En local, appuyez sur « R » pour recharger après une modification.
+runOnSave = false
 
 [browser]
 gatherUsageStats = false

@@ -381,38 +381,44 @@ coefficient honnêtement calibré n'existe pour elles. Fabriquer un « pluie =
 ### Streamlit Community Cloud
 
 Gratuit, sans carte bancaire. **Le dépôt local est déjà initialisé et commité**
-(`.env` et `.streamlit/secrets.toml` exclus, vérifié).
+(`.env` et `.streamlit/secrets.toml` exclus, vérifié fichier par fichier).
 
-**1. Mettre votre identité sur les commits** (ils portent une valeur générique) :
+**Le plus simple : double-cliquez sur `PUBLIER-PRONOSTAT.bat`.** Il répare le
+dépôt, remet les commits à votre nom, ouvre le formulaire GitHub prérempli,
+envoie le code et ouvre Streamlit Cloud. Aucun jeton à créer : l'authentification
+se fait par navigateur.
 
-```bash
-git config user.name "Votre Nom" && git config user.email "vous@exemple.com" && git commit --amend --reset-author --no-edit
-```
+Le détail, si vous préférez la main :
 
-**2. Publier sur GitHub.** Créez un dépôt vide sur
+**1. Publier sur GitHub.** Créez un dépôt vide sur
 [github.com/new](https://github.com/new) — nommez-le `pronostat`, sans README
 ni .gitignore — puis :
 
 ```bash
 git remote add origin https://github.com/VOTRE-COMPTE/pronostat.git
-```
-
-```bash
 git push -u origin main
 ```
 
-Git demandera vos identifiants. Comme mot de passe, utilisez un **jeton d'accès
-personnel** ([github.com/settings/tokens](https://github.com/settings/tokens),
-portée `repo`) : GitHub n'accepte plus les mots de passe de compte.
+À l'invite de connexion, choisissez **« Sign in with your browser »** :
+Git Credential Manager, livré avec Git pour Windows, gère l'autorisation. Un
+jeton d'accès personnel reste possible mais n'est plus nécessaire.
 
-**3. Déployer.** Sur [share.streamlit.io](https://share.streamlit.io),
-connectez-vous avec GitHub → **New app** → dépôt `pronostat`, branche `main`,
-fichier `app.py`, Python **3.12**. Vous obtenez une URL en `.streamlit.app`,
-utilisable depuis n'importe quel appareil.
+**2. Déployer.** Sur [share.streamlit.io](https://share.streamlit.io),
+connectez-vous avec GitHub → **Create app** → dépôt `pronostat`, branche `main`,
+fichier `app.py`.
 
-**4. Ajouter les clés.** **Settings → Secrets** : collez le contenu de
+> ⚠️ **Ouvrez « Advanced settings » et choisissez Python 3.12 AVANT de cliquer
+> sur Deploy.** Le fichier `runtime.txt` est fréquemment ignoré par Streamlit
+> Community Cloud, et la version de Python **ne peut plus être changée après
+> coup** : il faudrait supprimer l'application et la redéployer.
+
+Vous obtenez une URL en `.streamlit.app`, utilisable depuis n'importe quel
+appareil.
+
+**3. Ajouter les clés.** **Settings → Secrets** : collez le contenu de
 `.streamlit/secrets.toml.example` complété, plus
-`PRONOSTAT_ENV = "production"`. Aucun redéploiement nécessaire.
+`PRONOSTAT_ENV = "production"`. Aucun redéploiement nécessaire. Le pas-à-pas
+complet est dans `APRES-DEPLOIEMENT.md`.
 
 > `requirements.txt` ne contient que le nécessaire à l'exécution ;
 > `requirements-dev.txt` ajoute `pytest` pour le développement local. Le

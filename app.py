@@ -349,13 +349,21 @@ def render_controls() -> tuple[Competition | None, str | None, str | None, bool]
         teams, coverage, _reliability = load_roster(sport, comp.key)
 
     if not teams:
+        # En ligne il n'existe aucun fichier `.env` : les clés se saisissent
+        # dans Settings → Secrets. Indiquer le mauvais endroit enverrait
+        # l'utilisateur chercher un fichier qui n'existe pas sur le serveur.
+        where = (
+            "dans **Settings → Secrets** de votre application"
+            if cfg.IS_PRODUCTION
+            else "dans `.env`"
+        )
         hint = {
             "tennis": "Le tennis n'a pas de source gratuite sans clé : renseignez "
-            "`ODDS_API_KEY` dans `.env` pour charger les joueurs des tournois en cours.",
-            "basket": "Renseignez `BALLDONTLIE_API_KEY` (NBA) ou `ODDS_API_KEY` dans `.env`.",
+            f"`ODDS_API_KEY` {where} pour charger les joueurs des tournois en cours.",
+            "basket": f"Renseignez `BALLDONTLIE_API_KEY` (NBA) ou `ODDS_API_KEY` {where}.",
         }.get(
             sport,
-            "Renseignez `ODDS_API_KEY`, `FOOTBALL_DATA_API_KEY` ou `RAPIDAPI_KEY` dans `.env`.",
+            f"Renseignez `ODDS_API_KEY`, `FOOTBALL_DATA_API_KEY` ou `RAPIDAPI_KEY` {where}.",
         )
         st.error(f"Aucun participant chargé pour {comp.label}. {hint}", icon="🚫")
         st.caption(

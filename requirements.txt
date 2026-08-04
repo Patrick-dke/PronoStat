@@ -1,6 +1,11 @@
-streamlit>=1.36
-requests>=2.31
-numpy>=1.26
-pandas>=2.1
-plotly>=5.20
-python-dotenv>=1.0
+# Dépendances de production. L'hébergeur n'installe que ce fichier.
+#
+# Les bornes hautes (<2, <3, <7) sont volontaires : elles empêchent qu'une
+# future version majeure, publiée après votre mise en ligne, casse
+# l'application sans prévenir lors d'un redéploiement.
+streamlit>=1.36,<2
+requests>=2.31,<3
+numpy>=1.26,<3
+pandas>=2.1,<3
+plotly>=5.20,<7
+python-dotenv>=1.0,<2

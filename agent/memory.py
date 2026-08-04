@@ -16,7 +16,7 @@ import json
 import os
 import threading
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
 
 import config as cfg
@@ -484,3 +484,70 @@ class TuningAdvisor:
                 if isinstance(data, dict) else {}
         except (OSError, json.JSONDecodeError):
             return {}
+
+
+# ==========================================================================
+# Confrontation automatique aux résultats réels
+# ==========================================================================
+# Délai minimal entre l'analyse et la recherche du score. Un match dure deux
+# heures, et les sources gratuites mettent un moment à publier : chercher
+# trop tôt ne trouve rien et gaspille des appels.
+DELAI_AVANT_RESOLUTION_H = 6.0
+
+
+def resolve_pending(ledger: PredictionLedger, hub, max_lookups: int = 12) -> int:
+    """Confronte les pronostics en attente aux scores réellement obtenus.
+
+    Sans cette étape, le journal accumulait des analyses éternellement « en
+    attente » : rien n'appelait jamais `resolve()`, et le taux de réussite
+    ne pouvait donc jamais se former. Un score affiché sans être vérifié ne
+    vaut rien — c'est précisément ce qu'on reproche aux annonces de
+    performance invérifiables.
+
+    Trois précautions :
+
+    * on ignore les rencontres trop récentes : un score n'est publié qu'après
+      le coup de sifflet final, et les sources mettent un moment à suivre ;
+    * on borne le nombre de recherches par exécution, pour ne pas transformer
+      l'ouverture de la page en longue attente ;
+    * un score introuvable laisse simplement le pronostic en attente, sans
+      rien inventer ni marquer d'échec.
+
+    Renvoie le nombre de pronostics résolus.
+    """
+    attente = ledger.pending()
+    if not attente:
+        return 0
+
+    limite = datetime.now(UTC) - timedelta(hours=DELAI_AVANT_RESOLUTION_H)
+    resolus = 0
+    examines = 0
+    for entree in attente:
+        if examines >= max_lookups:
+            break
+        try:
+            cree = datetime.fromisoformat(entree.created_at)
+        except (TypeError, ValueError):
+            continue
+        if cree.tzinfo is None:
+            cree = cree.replace(tzinfo=UTC)
+        if cree > limite:
+            continue          # match probablement pas encore joué
+
+        comp = next(
+            (c for c in cfg.competitions(entree.sport) if c.label == entree.competition),
+            None,
+        )
+        if comp is None:
+            continue
+
+        examines += 1
+        try:
+            score = hub.final_score(comp, entree.home, entree.away)
+        except Exception:
+            continue
+        if score is None:
+            continue
+        if ledger.resolve(entree.id, score[0], score[1]):
+            resolus += 1
+    return resolus

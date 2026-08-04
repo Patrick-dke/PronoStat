@@ -1359,12 +1359,37 @@ def render_debug(result: AnalysisResult) -> None:
         )
 
 
+@st.cache_data(ttl=1800, show_spinner=False)
+def resolve_pending_predictions(en_attente: int, cles: str) -> int:
+    """Confronte les pronostics en attente aux scores réels.
+
+    Mis en cache une demi-heure : les résultats ne changent pas d'une minute
+    à l'autre, et il serait absurde de relancer cette recherche à chaque
+    interaction. Les arguments ne servent qu'à réveiller le cache quand de
+    nouveaux pronostics apparaissent ou que les sources changent.
+    """
+    from agent.memory import resolve_pending
+
+    try:
+        return resolve_pending(get_agent().ledger, get_hub())
+    except Exception:
+        return 0      # un échec de résolution ne doit jamais casser la page
+
+
 def render_history() -> None:
     """Journal des analyses et, quand il y en a assez, leur performance réelle."""
     ledger = get_agent().ledger
     entries = ledger.all()
     if not entries:
         return
+
+    # Sans cette confrontation, chaque analyse resterait « en attente » à
+    # jamais : le taux de réussite ne pourrait tout simplement pas se former.
+    with st.spinner("Vérification des pronostics passés…"):
+        resolve_pending_predictions(
+            sum(1 for e in entries if not e.resolved), cfg.keys_fingerprint()
+        )
+    entries = ledger.all()
 
     report = PerformanceAnalyst().report(entries)
     with st.expander("Mes analyses précédentes", expanded=False):

@@ -3675,6 +3675,35 @@ class DataHub:
         """Version détaillée : noms + couverture + fiabilité."""
         return self.research.roster(comp)
 
+    def final_score(self, comp: Competition, home: str, away: str) -> tuple[int, int] | None:
+        """Score final d'une rencontre déjà jouée, ou None si introuvable.
+
+        Sert à confronter un pronostic passé au résultat réel. On repart des
+        matchs récents de l'équipe à domicile, que plusieurs sources publient
+        déjà pour le calcul de forme : aucun endpoint supplémentaire, aucun
+        crédit consommé.
+
+        Un score introuvable n'est pas une anomalie — le match peut ne pas
+        avoir encore été joué, ou être sorti de la fenêtre de forme. On
+        renvoie None et le pronostic reste « en attente ».
+        """
+        for provider in self.providers:
+            if not hasattr(provider, "form"):
+                continue
+            try:
+                forme = provider.form(comp, home)
+            except Exception:
+                continue
+            for rencontre in getattr(forme, "matches", None) or []:
+                # Il faut le match joué À DOMICILE par cette équipe : c'est le
+                # sens dans lequel le pronostic a été enregistré.
+                if not rencontre.home:
+                    continue
+                if name_similarity(rencontre.opponent, away) < 0.80:
+                    continue
+                return int(round(rencontre.scored)), int(round(rencontre.conceded))
+        return None
+
     def goal_scorers(self, comp: Competition, home: str, away: str) -> ScorerBoard | None:
         """Buteurs probables du match, ou None si le marché n'est pas publié.
 

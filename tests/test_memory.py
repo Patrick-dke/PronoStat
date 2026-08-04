@@ -16,6 +16,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import config as cfg  # noqa: E402
+import agent.memory as mem  # noqa: E402
 from agent.memory import (  # noqa: E402
     LedgerEntry,
     PerformanceAnalyst,
@@ -234,3 +235,61 @@ class TestTuningAdvisor:
         advisor.decide(proposals[0].id, accept=True)
         data = json.loads((tmp_path / "overrides.json").read_text(encoding="utf-8"))
         assert "automatiquement" in data["_note"]
+
+
+class TestResolvePending:
+    """Sans confrontation aux résultats réels, chaque analyse resterait
+    « en attente » à jamais et le taux de réussite ne se formerait jamais."""
+
+    class _Hub:
+        def __init__(self, score):
+            self.score, self.appels = score, []
+
+        def final_score(self, comp, home, away):
+            self.appels.append((home, away))
+            return self.score
+
+    @staticmethod
+    def _ledger_avec_entree(tmp_path, heures_ecoulees: float):
+        from datetime import datetime, timedelta, timezone
+        led = mem.PredictionLedger(path=tmp_path / "l.json")
+        quand = datetime.now(timezone.utc) - timedelta(hours=heures_ecoulees)
+        led._save([{
+            "id": "e1", "created_at": quand.isoformat(timespec="seconds"),
+            "sport": "football", "competition": "Premier League",
+            "home": "Arsenal", "away": "Chelsea",
+            "market_key": "1x2_home", "recommendation": "Arsenal gagne",
+            "probability": 0.6, "confidence": 7.0,
+        }])
+        return led
+
+    def test_a_played_match_is_resolved(self, tmp_path):
+        led = self._ledger_avec_entree(tmp_path, heures_ecoulees=48)
+        hub = self._Hub((2, 0))
+        assert mem.resolve_pending(led, hub) == 1
+        entree = led.all()[0]
+        assert entree.resolved and entree.hit is True
+        assert (entree.actual_home, entree.actual_away) == (2, 0)
+
+    def test_a_too_recent_match_is_left_alone(self, tmp_path):
+        """Un score n'est publié qu'après le coup de sifflet final."""
+        led = self._ledger_avec_entree(tmp_path, heures_ecoulees=1)
+        hub = self._Hub((2, 0))
+        assert mem.resolve_pending(led, hub) == 0
+        assert hub.appels == [], "aucune recherche ne doit partir trop tôt"
+        assert not led.all()[0].resolved
+
+    def test_an_unknown_score_leaves_it_pending(self, tmp_path):
+        """Introuvable n'est pas un échec : on n'invente rien."""
+        led = self._ledger_avec_entree(tmp_path, heures_ecoulees=48)
+        assert mem.resolve_pending(led, self._Hub(None)) == 0
+        assert not led.all()[0].resolved
+        assert led.all()[0].hit is None
+
+    def test_a_failing_source_does_not_crash(self, tmp_path):
+        class Casse:
+            def final_score(self, *_a):
+                raise RuntimeError("panne")
+
+        led = self._ledger_avec_entree(tmp_path, heures_ecoulees=48)
+        assert mem.resolve_pending(led, Casse()) == 0

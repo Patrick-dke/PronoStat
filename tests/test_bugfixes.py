@@ -349,3 +349,23 @@ class TestValidationHardening:
         les autres."""
         report = DataValidator().validate(_bundle([1], [1], [1], [1]))
         assert len(report.warnings) == len(set(report.warnings))
+
+
+class TestSecretsReport:
+    """Le rapport de configuration s'affiche dans l'interface : aucune valeur
+    de clé ne doit pouvoir en sortir, sous aucune forme."""
+
+    def test_no_key_value_ever_leaks(self, monkeypatch):
+        import json
+        secret = "SUPERSECRET1234567890abcdef"
+        monkeypatch.setenv("ODDS_API_KEY", secret)
+        rapport = cfg.secrets_report()
+        serialise = json.dumps(rapport, default=str)
+        assert secret not in serialise
+        assert secret[:8] not in serialise, "même un fragment ne doit pas apparaître"
+        assert str(len(secret)) in rapport["origine"]["ODDS_API_KEY"]
+
+    def test_absent_key_is_named_as_such(self, monkeypatch):
+        monkeypatch.delenv("RAPIDAPI_KEY", raising=False)
+        rapport = cfg.secrets_report()
+        assert rapport["origine"]["RAPIDAPI_KEY"] == "ABSENTE"

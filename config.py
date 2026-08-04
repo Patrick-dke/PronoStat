@@ -431,6 +431,52 @@ class ApiKeys:
 KEYS = ApiKeys.from_environment()
 
 
+def secrets_report() -> dict[str, object]:
+    """État de la configuration, sans jamais révéler une seule valeur.
+
+    Quand aucune clé n'est active en ligne, la cause est invisible : les
+    valeurs par défaut prennent le relais en silence. Ce rapport dit
+    précisément *où* la lecture échoue — fichier absent, illisible, ou
+    présent mais ne contenant pas les clés attendues.
+
+    Ne sont exposés que des **noms** et des **longueurs**. Aucune valeur, ni
+    même un fragment, ne sort d'ici : ce rapport s'affiche dans l'interface.
+    """
+    attendues = [
+        "ODDS_API_KEY", "FOOTBALL_DATA_API_KEY", "RAPIDAPI_KEY",
+        "BALLDONTLIE_API_KEY", "THESPORTSDB_API_KEY", "PRONOSTAT_ENV",
+    ]
+    rapport: dict[str, object] = {
+        "streamlit_importable": False,
+        "secrets_lisibles": False,
+        "erreur": None,
+        "noms_dans_secrets": [],
+        "origine": {},
+    }
+
+    noms_secrets: list[str] = []
+    try:
+        import streamlit as st
+
+        rapport["streamlit_importable"] = True
+        noms_secrets = sorted(str(k) for k in st.secrets.keys())
+        rapport["secrets_lisibles"] = True
+        rapport["noms_dans_secrets"] = noms_secrets
+    except Exception as exc:
+        rapport["erreur"] = f"{type(exc).__name__} : {str(exc)[:200]}"
+
+    for nom in attendues:
+        depuis_env = os.getenv(nom)
+        if depuis_env not in (None, ""):
+            rapport["origine"][nom] = f"variable d'environnement ({len(depuis_env)} car.)"
+        elif nom in noms_secrets:
+            longueur = len(str(_secret(nom)))
+            rapport["origine"][nom] = f"secrets Streamlit ({longueur} car.)"
+        else:
+            rapport["origine"][nom] = "ABSENTE"
+    return rapport
+
+
 @dataclass(frozen=True)
 class SourceToggles:
     the_odds_api: bool = _env_bool("SOURCE_THE_ODDS_API", True)

@@ -1412,10 +1412,60 @@ def render_secrets_alert() -> None:
     )
 
 
+def render_config_diagnostic() -> None:
+    """Pourquoi aucune clé n'est active — affiché seulement dans ce cas.
+
+    Sans ce panneau, l'absence de clé est indiscernable d'une panne : les
+    valeurs par défaut prennent le relais en silence, et l'application se
+    comporte comme si tout allait bien. Aucune valeur de clé n'y figure,
+    uniquement des noms et des longueurs.
+    """
+    if cfg.KEYS.odds_api:
+        return          # une clé de cotes est active : rien à diagnostiquer
+
+    rapport = cfg.secrets_report()
+    with st.expander("🔑  Aucune clé de cotes active — voir pourquoi", expanded=False):
+        if not rapport["secrets_lisibles"]:
+            st.error(
+                "**Le fichier de secrets n'a pas pu être lu.**\n\n"
+                f"`{rapport['erreur'] or 'cause inconnue'}`",
+                icon="⛔",
+            )
+        else:
+            noms = rapport["noms_dans_secrets"]
+            if noms:
+                st.success(
+                    f"Fichier de secrets lu : **{len(noms)} entrée(s)** — "
+                    + ", ".join(f"`{n}`" for n in noms),
+                    icon="✅",
+                )
+            else:
+                st.warning(
+                    "**Le fichier de secrets est lisible mais vide.** Rien n'a été "
+                    "enregistré, ou l'enregistrement s'est fait ailleurs que dans "
+                    "*Settings → Secrets* de cette application.",
+                    icon="📭",
+                )
+
+        st.markdown("**Origine de chaque réglage attendu :**")
+        st.table(
+            {
+                "Réglage": list(rapport["origine"].keys()),
+                "Provenance": list(rapport["origine"].values()),
+            }
+        )
+        st.caption(
+            "Aucune valeur de clé n'est affichée ici, seulement des noms et des "
+            "longueurs. `ODDS_API_KEY` en « ABSENTE » signifie que l'application "
+            "ne la voit nulle part : ni dans l'environnement, ni dans les secrets."
+        )
+
+
 def main() -> None:
     drop_stale_caches()
     render_header()
     render_secrets_alert()
+    render_config_diagnostic()
     comp, home, away, launch = render_controls()
 
     if launch and comp and home and away:

@@ -486,6 +486,21 @@ def render_controls() -> tuple[Competition | None, str | None, str | None, bool]
         )
     else:
         mode = "libre"
+        # Une compétition sans calendrier n'est pas une panne : hors saison,
+        # entre deux tours, ou avant un tirage, il n'existe simplement aucun
+        # match à venir. Le taire laisserait croire à un dysfonctionnement.
+        st.info(
+            f"**Aucun match programmé en {comp.label} pour l'instant.** "
+            + (
+                "Les tours à élimination directe n'existent qu'une fois le tirage "
+                "effectué : d'ici là, aucune source ne peut annoncer les affiches."
+                if comp.is_cup
+                else "Le calendrier reprendra à la publication de la prochaine journée."
+            )
+            + " Vous pouvez tout de même confronter deux équipes ci-dessous, "
+            "sans cotes de match.",
+            icon="📭",
+        )
 
     if mode == "calendrier":
         col_match, col_go = st.columns([8, 2], vertical_alignment="bottom")

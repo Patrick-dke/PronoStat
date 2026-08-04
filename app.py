@@ -1202,8 +1202,28 @@ def render_tuning(report) -> None:
 # ==========================================================================
 # Programme principal
 # ==========================================================================
+def render_secrets_alert() -> None:
+    """Prévient si le fichier de secrets existe mais n'a pas pu être lu.
+
+    Sans ce message, l'application se comporte exactement comme si aucune clé
+    n'avait jamais été renseignée : cotes indisponibles, tennis vide, et pas
+    la moindre indication que le problème vient de la configuration.
+    """
+    if not cfg.SECRETS_ERROR:
+        return
+    st.error(
+        "**Vos secrets n'ont pas pu être lus — aucune clé n'est active.**\n\n"
+        f"`{cfg.SECRETS_ERROR}`\n\n"
+        "Cause quasi systématique : les délimiteurs de bloc de code "
+        "(les trois accents graves et le mot `toml`) collés avec le contenu. "
+        "Le fichier doit commencer directement par `PRONOSTAT_ENV = \"production\"`.",
+        icon="🔑",
+    )
+
+
 def main() -> None:
     render_header()
+    render_secrets_alert()
     comp, home, away, launch = render_controls()
 
     if launch and comp and home and away:

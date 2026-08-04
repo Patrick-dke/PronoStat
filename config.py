@@ -43,13 +43,29 @@ ODDS_HISTORY_FILE = CACHE_DIR / "odds_history.json"
 # --------------------------------------------------------------------------
 # Lecture des réglages : variables d'environnement + secrets Streamlit
 # --------------------------------------------------------------------------
+# Renseigné si le fichier de secrets existe mais refuse d'être lu. Une seule
+# cause en pratique : du TOML invalide — le plus souvent les délimiteurs de
+# bloc de code (```toml) collés par mégarde avec le contenu.
+SECRETS_ERROR: str | None = None
+
+# Absence de fichier de secrets : cas parfaitement normal en local, où la
+# configuration vient de `.env`. À distinguer d'un fichier illisible.
+_SECRETS_ABSENT = ("no secrets", "not found", "does not exist", "st.secrets has no")
+
+
 def _secret(name: str, default: str = "") -> str:
     """Valeur de configuration, quelle que soit la façon dont elle est fournie.
 
     Ordre : variable d'environnement (local, Docker) → secrets Streamlit
     (déploiement en ligne) → valeur par défaut. L'import de Streamlit est
     volontairement paresseux et protégé pour que les tests n'en dépendent pas.
+
+    Un fichier de secrets mal formé est retenu dans `SECRETS_ERROR` au lieu
+    d'être ignoré : sans cela, *toutes* les clés retombent sur leurs valeurs
+    par défaut et l'application se comporte comme si rien n'avait été
+    configuré, sans afficher la moindre explication.
     """
+    global SECRETS_ERROR
     value = os.getenv(name)
     if value not in (None, ""):
         return value
@@ -58,8 +74,10 @@ def _secret(name: str, default: str = "") -> str:
 
         if name in st.secrets:
             return str(st.secrets[name])
-    except Exception:
-        pass
+    except Exception as exc:  # pragma: no cover - idem
+        message = str(exc)
+        if not any(motif in message.lower() for motif in _SECRETS_ABSENT):
+            SECRETS_ERROR = f"{type(exc).__name__} : {message}"[:300]
     return default
 
 

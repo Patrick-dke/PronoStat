@@ -383,6 +383,18 @@ def render_header() -> None:
             "warn",
         ))
 
+    # Où vit le journal décide si le taux de réussite pourra un jour se
+    # former. L'information était enfouie dans un panneau repliable, donc
+    # invisible tant qu'on ne la cherchait pas : elle mérite l'en-tête.
+    try:
+        ou = get_agent().ledger.storage_label
+    except Exception:
+        ou = ""
+    if ou == "Firestore":
+        chips.append(badge("Journal : Firestore", "em"))
+    elif ou:
+        chips.append(badge("Journal éphémère : perdu au redémarrage", "warn"))
+
     for status in hub.quota_status():
         if status.exhausted:
             kind, txt = "warn", f"{status.label} : quota épuisé"

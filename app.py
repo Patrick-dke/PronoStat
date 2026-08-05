@@ -1577,11 +1577,32 @@ def render_config_diagnostic() -> None:
         )
 
 
+def render_storage_alert() -> None:
+    """Explique pourquoi Firestore n'est pas utilisé, quand il aurait dû l'être.
+
+    Silencieux si aucun compte de service n'est configuré : c'est le
+    fonctionnement par défaut, il n'y a rien à signaler. Le message
+    n'apparaît que lorsqu'une configuration existe mais échoue — sans lui,
+    le repli est parfaitement muet et introuvable.
+    """
+    from agent import storage
+
+    if not storage.FALLBACK_REASON:
+        return
+    st.warning(
+        "**Le journal ne peut pas être enregistré dans Firestore.** Il reste "
+        "sur le disque de l'hébergeur, effacé à chaque redémarrage.\n\n"
+        f"{storage.FALLBACK_REASON}",
+        icon="🗄️",
+    )
+
+
 def main() -> None:
     drop_stale_caches()
     render_header()
     render_secrets_alert()
     render_config_diagnostic()
+    render_storage_alert()
     comp, home, away, launch = render_controls()
 
     if launch and comp and home and away:

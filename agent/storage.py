@@ -156,22 +156,48 @@ class FirestoreStore:
             log.warning("Firestore a refuse l'ecriture : %s", resp.status_code)
 
 
+# Pourquoi le journal n'est pas dans Firestore, quand un compte de service a
+# pourtant été configuré. Reste à None si rien n'a été configuré — cas normal,
+# qui n'a pas à être signalé. Ne contient jamais de valeur secrète.
+FALLBACK_REASON: str | None = None
+
+
 def _service_account_info() -> dict | None:
     """Compte de service, s'il est configuré. Jamais journalisé."""
     import config as cfg
 
+    global FALLBACK_REASON
     brut = cfg._secret("FIREBASE_SERVICE_ACCOUNT").strip()
     if not brut:
         return None
-    try:
-        info = json.loads(brut)
-    except json.JSONDecodeError:
-        log.warning(
-            "FIREBASE_SERVICE_ACCOUNT n'est pas du JSON valide — "
-            "journal conservé en local"
+    # Les délimiteurs de bloc de code collés par mégarde sont la première
+    # cause d'échec, devant tout le reste.
+    if brut.startswith("```"):
+        FALLBACK_REASON = (
+            "La valeur commence par des accents graves (```) : ils ont été "
+            "collés avec le contenu. Le secret doit commencer directement par "
+            "une accolade { ."
         )
         return None
-    return info if isinstance(info, dict) and info.get("project_id") else None
+    try:
+        info = json.loads(brut)
+    except json.JSONDecodeError as exc:
+        FALLBACK_REASON = (
+            f"Le contenu n'est pas du JSON valide ({exc.msg}, ligne {exc.lineno}). "
+            "Vérifiez que le fichier a été copié en entier, entre trois "
+            "apostrophes ''' et non entre guillemets."
+        )
+        return None
+    if not isinstance(info, dict):
+        FALLBACK_REASON = "Le JSON lu n'est pas un objet."
+        return None
+    if not info.get("project_id"):
+        FALLBACK_REASON = (
+            "Le JSON ne contient pas de `project_id` : ce n'est probablement "
+            "pas un fichier de compte de service."
+        )
+        return None
+    return info
 
 
 def make_store(path: str, limit: int = 2000) -> LedgerStore:
@@ -182,6 +208,8 @@ def make_store(path: str, limit: int = 2000) -> LedgerStore:
     l'application de démarrer. Un journal éphémère vaut mieux qu'une page
     en erreur.
     """
+    global FALLBACK_REASON
+    FALLBACK_REASON = None
     info = _service_account_info()
     if info is None:
         return LocalFileStore(path, limit)
@@ -192,11 +220,17 @@ def make_store(path: str, limit: int = 2000) -> LedgerStore:
             info, scopes=_SCOPES
         )
     except ImportError:
-        log.warning("google-auth absent — journal conservé en local")
+        FALLBACK_REASON = (
+            "La bibliothèque `google-auth` n'est pas installée sur le serveur. "
+            "Elle figure dans requirements.txt : un redéploiement devrait suffire."
+        )
         return LocalFileStore(path, limit)
     except Exception as exc:
-        log.warning("Compte de service Firebase inutilisable (%s) — journal local",
-                    type(exc).__name__)
+        FALLBACK_REASON = (
+            f"Le compte de service est refusé ({type(exc).__name__}). "
+            "La clé privée est souvent tronquée à la copie : elle doit "
+            "contenir la ligne -----BEGIN PRIVATE KEY----- et sa fin."
+        )
         return LocalFileStore(path, limit)
     log.info("Journal des pronostics : Firestore (projet %s)", info["project_id"])
     return FirestoreStore(info["project_id"], credentials)

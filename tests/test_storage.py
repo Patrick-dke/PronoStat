@@ -125,3 +125,44 @@ class TestFirestoreStore:
         store = self._store(monkeypatch)
         monkeypatch.setattr(requests, "patch", casse)
         store.save([{"n": 1}])          # ne doit pas lever
+
+
+class TestFallbackReason:
+    """Un repli muet est introuvable : chaque cause doit se nommer.
+
+    Aucun de ces messages ne doit contenir de valeur secrète — ils
+    s'affichent dans l'interface.
+    """
+
+    def test_nothing_configured_stays_silent(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("FIREBASE_SERVICE_ACCOUNT", raising=False)
+        storage.make_store(str(tmp_path / "l.json"))
+        assert storage.FALLBACK_REASON is None
+
+    def test_code_fences_are_named_explicitly(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("FIREBASE_SERVICE_ACCOUNT", '```toml\n{"a":1}\n```')
+        storage.make_store(str(tmp_path / "l.json"))
+        assert "accents graves" in (storage.FALLBACK_REASON or "")
+
+    def test_truncated_json_is_named(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("FIREBASE_SERVICE_ACCOUNT", '{"type":"service_account"')
+        storage.make_store(str(tmp_path / "l.json"))
+        assert "JSON valide" in (storage.FALLBACK_REASON or "")
+
+    def test_missing_project_id_is_named(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("FIREBASE_SERVICE_ACCOUNT", json.dumps({"type": "service_account"}))
+        storage.make_store(str(tmp_path / "l.json"))
+        assert "project_id" in (storage.FALLBACK_REASON or "")
+
+    def test_the_reason_never_leaks_the_secret(self, tmp_path, monkeypatch):
+        secret = "CLE-PRIVEE-TRES-SECRETE-0123456789"
+        monkeypatch.setenv("FIREBASE_SERVICE_ACCOUNT", json.dumps({
+            "type": "service_account", "project_id": "p",
+            "private_key": secret, "client_email": "a@b.c",
+            "token_uri": "https://oauth2.googleapis.com/token",
+        }))
+        storage.make_store(str(tmp_path / "l.json"))
+        raison = storage.FALLBACK_REASON or ""
+        assert raison, "un compte de service refusé doit être expliqué"
+        assert secret not in raison
+        assert secret[:10] not in raison

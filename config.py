@@ -447,15 +447,21 @@ def refresh_keys() -> bool:
 
 
 def keys_fingerprint() -> str:
-    """Empreinte des clés *présentes*, sans jamais exposer leur valeur.
+    """Empreinte des secrets *présents*, sans jamais exposer leur valeur.
 
     Seule la présence compte : elle suffit à savoir qu'il faut reconstruire
     les objets partagés, sans qu'aucun secret ne circule.
+
+    Le compte de service Firebase en fait partie. L'oublier avait un effet
+    concret : ajouter ce secret ne changeait pas l'empreinte, l'agent mis en
+    cache gardait donc son journal sur disque local, et Firestore restait
+    inutilisé sans qu'aucune erreur ne l'explique.
     """
     presentes = [
         nom for nom, valeur in (
             ("odds", KEYS.odds_api), ("fd", KEYS.football_data),
             ("rapid", KEYS.rapidapi), ("bdl", KEYS.balldontlie),
+            ("firebase", _secret("FIREBASE_SERVICE_ACCOUNT").strip()),
         ) if valeur
     ]
     return ",".join(presentes) or "aucune"

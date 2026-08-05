@@ -397,3 +397,39 @@ class TestKeyRefresh:
         empreinte = cfg.keys_fingerprint()
         assert secret not in empreinte
         assert secret[:6] not in empreinte
+
+
+class TestFirebaseInFingerprint:
+    """Ajouter le compte de service doit reconstruire les objets partagés.
+
+    Oublier ce secret dans l'empreinte avait un effet concret : l'agent mis
+    en cache gardait son journal sur disque local, Firestore restait
+    inutilisé, et aucune erreur ne l'expliquait.
+    """
+
+    def test_adding_the_service_account_changes_the_fingerprint(self, monkeypatch):
+        import json as _json
+
+        monkeypatch.setenv("ODDS_API_KEY", "0123456789abcdef")
+        monkeypatch.delenv("FIREBASE_SERVICE_ACCOUNT", raising=False)
+        cfg.refresh_keys()
+        avant = cfg.keys_fingerprint()
+
+        monkeypatch.setenv(
+            "FIREBASE_SERVICE_ACCOUNT",
+            _json.dumps({"type": "service_account", "project_id": "p"}),
+        )
+        cfg.refresh_keys()
+        assert cfg.keys_fingerprint() != avant
+        assert "firebase" in cfg.keys_fingerprint()
+
+    def test_the_fingerprint_never_exposes_the_account(self, monkeypatch):
+        import json as _json
+
+        secret = "CLE-PRIVEE-0123456789"
+        monkeypatch.setenv("FIREBASE_SERVICE_ACCOUNT", _json.dumps({
+            "type": "service_account", "project_id": "p", "private_key": secret,
+        }))
+        cfg.refresh_keys()
+        empreinte = cfg.keys_fingerprint()
+        assert secret not in empreinte and "service_account" not in empreinte

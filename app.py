@@ -741,11 +741,23 @@ def render_headline(pred: Prediction) -> None:
     with c1:
         if pred.top_scores and pred.sport != "basket":
             label = "Score le plus probable" if pred.sport != "tennis" else "Score en sets"
-            top = pred.top_scores[0]
+            # Priorité au score compatible avec le pronostic affiché. Le score
+            # modal absolu appartient souvent à une autre issue — c'est correct
+            # mathématiquement, mais montrer « victoire de A » au-dessus de
+            # « 1-1 » donne l'impression que le moteur se contredit.
+            top = pred.pick_scores[0] if pred.pick_scores else pred.top_scores[0]
             body = (
                 f'<div class="ps-big">{esc(top[0])}</div>'
                 f'<div class="ps-sub">{pct(top[1], 1)} des simulations</div>'
             )
+            brut = pred.top_scores[0]
+            if pred.pick_scores and brut[0] != top[0]:
+                body += (
+                    f'<div class="ps-sub" style="margin-top:.35rem">'
+                    f'Score le plus fréquent toutes issues confondues : '
+                    f'<b>{esc(brut[0])}</b> ({pct(brut[1], 1)}) — il correspond '
+                    f'à une autre issue que le pronostic.</div>'
+                )
         else:
             label = "Score attendu"
             body = (

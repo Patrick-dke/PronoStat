@@ -737,3 +737,88 @@ class TestValueAndConfidence:
         decoded = json.loads(json.dumps(record))
         assert decoded["sport"] == "football"
         assert decoded["competition"] == "Premier League"
+
+
+class TestScoreCoherence:
+    """Le score affiche doit pouvoir se lire a cote du pronostic sans le contredire."""
+
+    @staticmethod
+    def _tirages():
+        import numpy as np
+        # 6 victoires domicile reparties (2-0, 2-1, 3-1), 4 nuls tous en 1-1.
+        # Le 1-1 est donc le score modal absolu alors que la victoire domicile
+        # est l'issue majoritaire : exactement le cas signale par l'utilisateur.
+        dom = np.array([2, 2, 2, 3, 2, 2, 1, 1, 1, 1])
+        ext = np.array([0, 1, 0, 1, 1, 0, 1, 1, 1, 1])
+        return dom, ext
+
+    def test_the_absolute_modal_score_can_belong_to_another_outcome(self):
+        dom, ext = self._tirages()
+        assert engine._score_labels(dom, ext)[0][0] == "1-1"
+        assert (dom > ext).mean() == pytest.approx(0.6), "la victoire reste majoritaire"
+
+    def test_conditional_score_matches_the_requested_outcome(self):
+        dom, ext = self._tirages()
+        got = engine.scores_matching(dom, ext, "home")
+        assert got and got[0][0] == "2-0"
+        for libelle, _p in got:
+            a, b = (int(x) for x in libelle.split("-"))
+            assert a > b, "tous les scores proposes doivent donner cette issue"
+
+    def test_probabilities_stay_absolute_not_renormalised(self):
+        """Renormaliser gonflerait des chiffres compares a d'autres marches."""
+        dom, ext = self._tirages()
+        got = engine.scores_matching(dom, ext, "home")
+        assert sum(p for _s, p in got) == pytest.approx(0.6, abs=1e-9)
+
+    def test_an_impossible_outcome_returns_nothing(self):
+        import numpy as np
+        dom, ext = np.array([1, 2]), np.array([0, 0])   # aucune defaite
+        assert engine.scores_matching(dom, ext, "away") == []
+
+
+class TestConsistencyValidator:
+    """Garde-fou : attraper une regression future avant que l'utilisateur ne la voie."""
+
+    @staticmethod
+    def _pred(**kw):
+        base = dict(sport="football", home="A", away="B", n_sims=10,
+                    outcome_probs={"home": 0.5, "draw": 0.3, "away": 0.2},
+                    market_probs=None, blended_target=None)
+        base.update(kw)
+        return engine.Prediction(**base)
+
+    def test_a_coherent_prediction_reports_nothing(self):
+        pred = self._pred()
+        pred.lines = [
+            engine.MarketLine("dc_1x", "A ou nul", 0.8),
+            engine.MarketLine("btts_yes", "oui", 0.55),
+            engine.MarketLine("btts_no", "non", 0.45),
+        ]
+        assert engine.check_consistency(pred) == []
+
+    def test_outcomes_not_summing_to_one_are_caught(self):
+        pred = self._pred(outcome_probs={"home": 0.5, "draw": 0.3, "away": 0.5})
+        assert any("100 %" in m for m in engine.check_consistency(pred))
+
+    def test_a_double_chance_out_of_step_is_caught(self):
+        pred = self._pred()
+        pred.lines = [engine.MarketLine("dc_1x", "A ou nul", 0.95)]   # attendu 0.80
+        assert any("dc_1x" in m for m in engine.check_consistency(pred))
+
+    def test_complementary_markets_are_checked(self):
+        pred = self._pred()
+        pred.lines = [
+            engine.MarketLine("btts_yes", "oui", 0.6),
+            engine.MarketLine("btts_no", "non", 0.6),
+        ]
+        assert any("BTTS" in m for m in engine.check_consistency(pred))
+
+    def test_a_score_contradicting_the_pick_is_caught(self):
+        pred = self._pred()
+        pred.main_pick = engine.MainPick(
+            key="1x2_home", label="A gagne", family="vainqueur",
+            probability=0.5, confidence=7.0,
+        )
+        pred.pick_scores = [("1-1", 0.12)]        # un nul sous un pronostic de victoire
+        assert any("contredit" in m for m in engine.check_consistency(pred))

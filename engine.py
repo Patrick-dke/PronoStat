@@ -489,10 +489,19 @@ def choose_main_pick(pred: "Prediction") -> MainPick | None:
     scored: list[tuple[float, MarketLine, str]] = []
     fallback: list[tuple[float, MarketLine, str]] = []
 
+    # Le nul n'est retenu que s'il est réellement l'issue la plus probable.
+    # L'écarter systématiquement — ce que faisait le moteur — revenait à
+    # annoncer une victoire alors que la distribution désignait le nul :
+    # le pronostic principal cessait alors de refléter le modèle.
+    issues = pred.outcome_probs or {}
+    nul_favori = bool(issues) and max(issues, key=issues.get) == "draw"
+
     for line in pred.lines:
         family = _pick_family(line.key)
-        if family is None or line.key == "1x2_draw":
-            continue  # le nul sec n'est jamais une recommandation utile
+        if family is None:
+            continue
+        if line.key == "1x2_draw" and not nul_favori:
+            continue  # un nul minoritaire ne dit rien d'utile
         family_name, weight = family
         score = line.prob * weight
         if line.key.startswith(("1x2_", "ml_")):
@@ -624,6 +633,11 @@ class Prediction:
     blended_target: dict[str, float] | None
     expected: dict[str, float] = field(default_factory=dict)
     top_scores: list[tuple[str, float]] = field(default_factory=list)
+    # Scores compatibles avec le pronostic principal. Même distribution que
+    # `top_scores`, lue sous condition de l'issue retenue.
+    pick_scores: list[tuple[str, float]] = field(default_factory=list)
+    # Contradictions détectées avant affichage. Vide en fonctionnement normal.
+    consistency: list[str] = field(default_factory=list)
     score_matrix: np.ndarray | None = None
     lines: list[MarketLine] = field(default_factory=list)
     value_bets: list[MarketLine] = field(default_factory=list)
@@ -827,6 +841,52 @@ def _score_labels(home_goals: np.ndarray, away_goals: np.ndarray, top: int = 5) 
     n = home_goals.size
     pairs, counts = np.unique(
         np.stack([home_goals, away_goals], axis=1), axis=0, return_counts=True
+    )
+    order = np.argsort(-counts)[:top]
+    return [
+        (f"{int(pairs[i][0])}-{int(pairs[i][1])}", float(counts[i] / n)) for i in order
+    ]
+
+
+def scores_matching(
+    home_goals: np.ndarray, away_goals: np.ndarray, outcome: str, top: int = 5
+) -> list[tuple[str, float]]:
+    """Scores les plus probables **parmi ceux qui donnent l'issue demandée**.
+
+    Le score le plus probable dans l'absolu appartient souvent à une autre
+    issue que l'issue la plus probable, et ce n'est pas une contradiction :
+    une victoire à 51 % se disperse sur 1-0, 2-0, 2-1, 3-1…, tandis qu'un nul
+    à 24 % se concentre presque entièrement sur 1-1. Le 1-1 peut donc être le
+    score le plus fréquent alors que la victoire reste l'issue la plus
+    probable.
+
+    Mathématiquement correct, mais illisible : afficher « victoire de A » à
+    côté de « score le plus probable 1-1 » donne l'impression que le moteur
+    se contredit. On expose donc aussi le score le plus probable **cohérent
+    avec le pronostic affiché**, tiré de la même simulation — aucune vérité
+    parallèle n'est introduite, on lit simplement la distribution sous
+    condition.
+
+    Les probabilités renvoyées restent **absolues**, non conditionnelles :
+    « 2-1 à 9 % » veut bien dire 9 % de tous les scénarios, pas 9 % des
+    scénarios de victoire. Renormaliser gonflerait artificiellement des
+    chiffres que l'utilisateur compare à ceux des autres marchés.
+    """
+    diff = home_goals - away_goals
+    if outcome == "home":
+        masque = diff > 0
+    elif outcome == "away":
+        masque = diff < 0
+    elif outcome == "draw":
+        masque = diff == 0
+    else:
+        return []
+    if not masque.any():
+        return []
+    n = home_goals.size          # dénominateur global : probabilités absolues
+    pairs, counts = np.unique(
+        np.stack([home_goals[masque], away_goals[masque]], axis=1),
+        axis=0, return_counts=True,
     )
     order = np.argsort(-counts)[:top]
     return [
@@ -1540,6 +1600,100 @@ def _num(x: float, digits: int = 1) -> str:
     return f"{x:.{digits}f}".replace(".", ",")
 
 
+def attach_pick_scores(pred: Prediction) -> None:
+    """Score le plus probable **compatible avec le pronostic principal**.
+
+    Ne remplace pas `top_scores`, qui reste la lecture brute de la
+    distribution : les deux viennent des mêmes tirages, on en expose
+    simplement une seconde lecture, sous condition de l'issue retenue.
+    """
+    pred.pick_scores = []
+    pick = pred.main_pick
+    samples = pred.samples or {}
+    home, away = samples.get("home"), samples.get("away")
+    if pick is None or home is None or away is None:
+        return
+    issue = {
+        "1x2_home": "home", "1x2_draw": "draw", "1x2_away": "away",
+        "ml_home": "home", "ml_away": "away",
+    }.get(pick.key)
+    if issue is None:
+        return          # marché sans issue 1X2 : rien à conditionner
+    pred.pick_scores = scores_matching(home, away, issue)
+
+
+def check_consistency(pred: Prediction) -> list[str]:
+    """Contradictions entre les sorties affichées, s'il en reste.
+
+    Tous les marchés dérivant des mêmes tirages Monte Carlo, une véritable
+    impossibilité ne devrait jamais survenir. Ce contrôle est donc un
+    garde-fou : il attrape une régression future — un marché qu'on brancherait
+    par erreur sur une autre source — avant que l'utilisateur ne la voie.
+
+    On ne signale que des **impossibilités logiques**, jamais une simple
+    tension. Un score modal appartenant à une autre issue que l'issue la plus
+    probable n'en est pas une : c'est le comportement normal d'une
+    distribution, et le crier serait un faux positif permanent.
+    """
+    soucis: list[str] = []
+
+    def proba(cle: str) -> float | None:
+        ligne = pred.line(cle)
+        return None if ligne is None else ligne.prob
+
+    # 1. Les issues 1X2 forment une partition : leur somme vaut 1.
+    issues = pred.outcome_probs or {}
+    if issues:
+        total = sum(issues.values())
+        if abs(total - 1.0) > 0.01:
+            soucis.append(f"Les issues 1X2 totalisent {total:.1%} au lieu de 100 %")
+
+    # 2. Double chance et issue simple doivent concorder.
+    for cle_dc, composantes in (
+        ("dc_1x", ("home", "draw")), ("dc_x2", ("draw", "away")),
+        ("dc_12", ("home", "away")),
+    ):
+        p_dc = proba(cle_dc)
+        if p_dc is None or not issues:
+            continue
+        attendu = sum(issues.get(k, 0.0) for k in composantes)
+        if abs(p_dc - attendu) > 0.02:
+            soucis.append(
+                f"{cle_dc} annonce {p_dc:.1%} alors que ses composantes valent {attendu:.1%}"
+            )
+
+    # 3. Over et Under d'une même ligne sont complémentaires.
+    for ligne in pred.lines:
+        if not ligne.key.startswith("total_over_"):
+            continue
+        p_under = proba(ligne.key.replace("total_over_", "total_under_"))
+        if p_under is not None and abs(ligne.prob + p_under - 1.0) > 0.02:
+            soucis.append(
+                f"{ligne.key} et son Under totalisent {ligne.prob + p_under:.1%}"
+            )
+
+    # 4. BTTS oui/non également.
+    p_oui, p_non = proba("btts_yes"), proba("btts_no")
+    if p_oui is not None and p_non is not None and abs(p_oui + p_non - 1.0) > 0.02:
+        soucis.append(f"BTTS oui et non totalisent {p_oui + p_non:.1%}")
+
+    # 5. Le score mis en avant doit vraiment produire l'issue annoncée.
+    if pred.main_pick and pred.pick_scores:
+        issue = {"1x2_home": "home", "1x2_draw": "draw", "1x2_away": "away",
+                 "ml_home": "home", "ml_away": "away"}.get(pred.main_pick.key)
+        libelle = pred.pick_scores[0][0]
+        try:
+            buts_dom, buts_ext = (int(x) for x in libelle.split("-"))
+        except ValueError:
+            buts_dom = buts_ext = 0
+        reel = "home" if buts_dom > buts_ext else ("away" if buts_ext > buts_dom else "draw")
+        if issue is not None and reel != issue:
+            soucis.append(
+                f"Le score {libelle} contredit le pronostic {pred.main_pick.label}"
+            )
+    return soucis
+
+
 def build_verdict(pred: Prediction, bundle: Bundle) -> str:
     """Avis court : 2 à 3 phrases maximum (§2)."""
     fav = pred.favorite
@@ -1695,6 +1849,8 @@ def analyse(
     pred.research = report
     pred.confidence = compute_confidence(bundle, pred, report)
     pred.main_pick = choose_main_pick(pred)
+    attach_pick_scores(pred)
+    pred.consistency = check_consistency(pred)
     pred.verdict = build_verdict(pred, bundle)
     pred.risk = build_risk_line(pred, bundle)
 

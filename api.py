@@ -43,11 +43,11 @@ from engine import __doc__ as _engine_doc  # noqa: F401  (présence vérifiée a
 UTC = timezone.utc
 log = logging.getLogger("pronostat.api")
 
-# Version du moteur, archivée avec chaque analyse. À incrémenter dès qu'un
-# changement modifie les probabilités produites : sans cela, impossible de
-# savoir quelle version a produit une prédiction passée lors du backtesting.
-MODEL_VERSION = "1.0"
-API_VERSION = "1.0"
+# Les versions du moteur viennent de `config` : l'interface et l'API
+# produisent les mêmes analyses, les dupliquer ici les ferait diverger.
+MODEL_VERSION = cfg.MODEL_VERSION
+RESEARCH_VERSION = cfg.RESEARCH_VERSION
+API_VERSION = "1.0"      # version du contrat HTTP, indépendante du moteur
 
 app = FastAPI(
     title="PronoStat",
@@ -148,6 +148,7 @@ def health() -> dict[str, Any]:
         "status": "ok",
         "api_version": API_VERSION,
         "model_version": MODEL_VERSION,
+        "research_version": RESEARCH_VERSION,
         "token_configured": bool(os.getenv("PRONOSTAT_API_TOKEN", "").strip()),
     }
 
@@ -194,6 +195,8 @@ def analyse(req: AnalysisRequest) -> dict[str, Any]:
         {
             "analysis_id": _analysis_id(req, comp),
             "model_version": MODEL_VERSION,
+            "research_version": RESEARCH_VERSION,
+            "data_timestamp": _oldest_source(pred),
             "prediction_timestamp": datetime.now(UTC).isoformat(timespec="seconds"),
             "top_scores": [{"score": s, "probability": p} for s, p in pred.top_scores],
             # Score compatible avec le pronostic : c'est celui que l'interface
@@ -239,6 +242,9 @@ def read_analysis(analysis_id: str) -> dict[str, Any]:
             "home": entree.home,
             "away": entree.away,
         },
+        "model_version": entree.model_version,
+        "research_version": entree.research_version,
+        "data_timestamp": entree.data_timestamp,
         "recommendation": entree.recommendation,
         "market_key": entree.market_key,
         "probability": entree.probability,
@@ -272,6 +278,14 @@ def record_result(req: ResultRequest) -> dict[str, Any]:
         "hit": entree.hit,
         "reason": None if tranche else "Marché non évaluable à partir du seul score final.",
     }
+
+
+def _oldest_source(prediction) -> str | None:
+    """Fraicheur de l'analyse : la donnee la PLUS ANCIENNE, pas la plus
+    recente. Retenir la meilleure flatterait le bilan."""
+    from agent.memory import _oldest_data
+
+    return _oldest_data(prediction)
 
 
 def _analysis_id(req: AnalysisRequest, comp) -> str:

@@ -293,3 +293,74 @@ class TestResolvePending:
 
         led = self._ledger_avec_entree(tmp_path, heures_ecoulees=48)
         assert mem.resolve_pending(led, Casse()) == 0
+
+
+class TestVersioning:
+    """Sans versions archivees, le backtesting compare des predictions issues
+    de moteurs differents en croyant mesurer une seule methode."""
+
+    class _Prov:
+        def __init__(self, quand):
+            self.fetched_at = quand
+
+    class _Pred:
+        sport = "football"
+        home, away = "A", "B"
+        main_pick = None
+        outcome_probs = {"home": 0.6, "draw": 0.2, "away": 0.2}
+
+        def __init__(self, provenances=()):
+            self.provenances = list(provenances)
+
+    class _Dec:
+        recommendation = "A gagne"
+        probability, confidence = 0.6, 7.0
+        odds = None
+        fingerprint = "abc"
+
+    def test_versions_are_archived_with_each_prediction(self, tmp_path):
+        led = mem.PredictionLedger(path=tmp_path / "l.json")
+        led.record(self._Dec(), self._Pred(), "Premier League")
+        entree = led.all()[0]
+        assert entree.model_version == cfg.MODEL_VERSION
+        assert entree.research_version == cfg.RESEARCH_VERSION
+
+    def test_freshness_keeps_the_oldest_source_not_the_newest(self, tmp_path):
+        """Une analyse n'est pas fraiche parce qu'UNE source l'etait."""
+        from datetime import datetime, timedelta, timezone
+        recent = datetime(2026, 8, 5, 12, 0, tzinfo=timezone.utc)
+        vieux = recent - timedelta(days=3)
+        pred = self._Pred([self._Prov(recent), self._Prov(vieux)])
+        led = mem.PredictionLedger(path=tmp_path / "l.json")
+        led.record(self._Dec(), pred, "Premier League")
+        assert led.all()[0].data_timestamp.startswith("2026-08-02")
+
+    def test_no_source_leaves_the_timestamp_empty(self, tmp_path):
+        led = mem.PredictionLedger(path=tmp_path / "l.json")
+        led.record(self._Dec(), self._Pred(), "Premier League")
+        assert led.all()[0].data_timestamp is None
+
+    def test_an_older_entry_still_loads(self, tmp_path):
+        """Le journal existant ne doit pas devenir illisible."""
+        led = mem.PredictionLedger(path=tmp_path / "l.json")
+        led._save([{
+            "id": "vieille", "created_at": "2026-01-01T00:00:00+00:00",
+            "sport": "football", "competition": "PL", "home": "A", "away": "B",
+            "market_key": "1x2_home", "recommendation": "A",
+            "probability": 0.6, "confidence": 7.0,
+        }])
+        assert led.all()[0].model_version == ""
+
+    def test_an_entry_from_a_newer_version_does_not_break_reading(self, tmp_path):
+        """Firestore peut etre partage avec une version deployee ailleurs :
+        une seule cle inconnue ne doit pas rendre tout l'historique illisible."""
+        led = mem.PredictionLedger(path=tmp_path / "l.json")
+        led._save([{
+            "id": "future", "created_at": "2026-01-01T00:00:00+00:00",
+            "sport": "football", "competition": "PL", "home": "A", "away": "B",
+            "market_key": "1x2_home", "recommendation": "A",
+            "probability": 0.6, "confidence": 7.0,
+            "champ_inconnu_dune_version_ulterieure": {"x": 1},
+        }])
+        entrees = led.all()
+        assert len(entrees) == 1 and entrees[0].id == "future"

@@ -533,6 +533,25 @@ SOURCES = SourceToggles()
 
 PREMIUM_MODE = _env_bool("PRONOSTAT_PREMIUM", False)
 
+
+# --------------------------------------------------------------------------
+# Versions archivées avec chaque prédiction
+# --------------------------------------------------------------------------
+# Déclarées ici, et nulle part ailleurs : l'interface et l'API HTTP produisent
+# les mêmes analyses, elles doivent archiver le même numéro. Deux constantes
+# séparées finiraient par diverger, et l'historique deviendrait ininterprétable.
+#
+# MODEL_VERSION  — à incrémenter dès qu'un changement modifie les
+#                  probabilités produites : lois de tirage, calibration,
+#                  pondérations, choix du pronostic principal.
+# RESEARCH_VERSION — à incrémenter quand la collecte change : source ajoutée
+#                  ou retirée, fusion modifiée, consensus de cotes revu.
+#
+# Sans ces numéros, le backtesting compare des prédictions issues de moteurs
+# différents en croyant mesurer une seule méthode.
+MODEL_VERSION = "1.1"
+RESEARCH_VERSION = "1.2"
+
 # Fiabilité de chaque source, entre 0 et 1. Le moteur de recherche
 # approfondie s'en sert pour arbitrer quand deux sources se contredisent, et
 # pour calculer l'indice de fiabilité affiché à l'utilisateur.

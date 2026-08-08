@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 import os
 import threading
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
 
@@ -49,6 +49,15 @@ class LedgerEntry:
     odds: float | None = None
     fingerprint: str = ""
     outcome_probs: dict[str, float] = field(default_factory=dict)
+    # --- versions : sans elles, le backtesting compare des prédictions
+    # issues de moteurs différents en croyant mesurer une seule méthode ---
+    model_version: str = ""
+    research_version: str = ""
+    # Fraîcheur de la donnée la plus ancienne ayant servi à l'analyse. Une
+    # prédiction juste fondée sur des données périmées ne vaut pas une
+    # prédiction juste fondée sur des données fraîches : l'écart doit rester
+    # mesurable après coup.
+    data_timestamp: str | None = None
     # --- rempli plus tard, quand le résultat est connu ---
     resolved_at: str | None = None
     actual_home: int | None = None
@@ -58,6 +67,20 @@ class LedgerEntry:
     @property
     def resolved(self) -> bool:
         return self.hit is not None
+
+
+def _oldest_data(prediction) -> str | None:
+    """Horodatage de la donnée la plus ancienne ayant servi à l'analyse.
+
+    C'est la plus ancienne, non la plus récente, qui qualifie l'analyse : une
+    prédiction n'est pas fraîche parce qu'une de ses sources l'était, elle
+    l'est si toutes le sont. Retenir la meilleure flatterait le bilan.
+    """
+    dates = [
+        p.fetched_at for p in getattr(prediction, "provenances", None) or []
+        if getattr(p, "fetched_at", None) is not None
+    ]
+    return min(dates).isoformat(timespec="seconds") if dates else None
 
 
 def _match_id(sport: str, competition: str, home: str, away: str) -> str:
@@ -113,6 +136,9 @@ class PredictionLedger:
             odds=decision.odds,
             fingerprint=decision.fingerprint,
             outcome_probs={k: round(v, 4) for k, v in prediction.outcome_probs.items()},
+            model_version=cfg.MODEL_VERSION,
+            research_version=cfg.RESEARCH_VERSION,
+            data_timestamp=_oldest_data(prediction),
         )
         with self._lock:
             rows = self._load()
@@ -146,7 +172,28 @@ class PredictionLedger:
 
     # -- lecture --------------------------------------------------------
     def all(self) -> list[LedgerEntry]:
-        return [LedgerEntry(**row) for row in self._load() if "id" in row]
+        """Journal complet, tolérant aux entrées d'autres versions.
+
+        Deux directions à supporter, maintenant que le format porte des
+        numéros de version :
+
+        * une entrée **ancienne** n'a pas les champs récents — les valeurs
+          par défaut du dataclass s'en chargent ;
+        * une entrée **plus récente** en a de nouveaux, écrits par une version
+          déployée ailleurs, sur le même Firestore. Les passer tels quels
+          lèverait `TypeError` et rendrait tout l'historique illisible pour
+          une seule clé inconnue. On les ignore.
+        """
+        connus = {f.name for f in fields(LedgerEntry)}
+        entrees = []
+        for row in self._load():
+            if "id" not in row:
+                continue
+            try:
+                entrees.append(LedgerEntry(**{k: v for k, v in row.items() if k in connus}))
+            except (TypeError, ValueError):
+                continue          # ligne corrompue : on saute, on ne casse pas
+        return entrees
 
     def pending(self) -> list[LedgerEntry]:
         return [e for e in self.all() if not e.resolved]

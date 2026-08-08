@@ -1,0 +1,10 @@
+# Dépendances du service HTTP (api.py) — l'orchestration n8n.
+#
+# Volontairement séparées de requirements.txt : l'application Streamlit n'a
+# aucun besoin de FastAPI, et l'y ajouter allongerait chaque déploiement pour
+# du code qu'elle n'exécute jamais. Les deux services partagent en revanche
+# le même moteur, d'où l'inclusion du fichier principal.
+-r requirements.txt
+
+fastapi>=0.110,<1
+uvicorn[standard]>=0.27,<1

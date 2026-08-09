@@ -27,3 +27,7 @@ Thumbs.db
 
 # Depot git vide cree par erreur
 PronoStat/
+
+# Workflows n8n generes (outils de construction, pas des livrables)
+outputs/_*.py
+outputs/_*.js

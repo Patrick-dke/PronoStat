@@ -1,0 +1,423 @@
+{
+  "name": "PronoStat 2 — Collecte des résultats",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 6
+            }
+          ]
+        }
+      },
+      "id": "7b91a374-af7f-5fae-8190-d13b9111dfff",
+      "name": "Cron — toutes les 6 h",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -400,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "\n/* Configuration du collecteur de résultats. */\nreturn [{ json: {\n  pronostatApi     : 'https://pronostat-api.example.com',   // ⚠ à remplacer\n  delaiApresCoupEnvoi_h : 6,     // un match dure rarement plus de 6 h, prolongations comprises\n  maxParCycle      : 50,         // garde-fou : pas de rattrapage massif involontaire\n  abandonApres_j   : 7           // au-delà, l'analyse reste « en attente », jamais « échec »\n}}];\n"
+      },
+      "id": "ec4e9773-de11-5d33-809b-bd71340f83cd",
+      "name": "Config résultats",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -200,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.pronostatApi }}/analysis/pending",
+        "options": {
+          "timeout": 20000
+        }
+      },
+      "id": "86891070-c6c5-534f-a81c-6828019e528f",
+      "name": "Analyses en attente",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        0,
+        300
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "alwaysOutputData": true,
+      "onError": "continueRegularOutput",
+      "notes": "GET /analysis/pending → [{analysis_id, fixture_key, home, away, starts_at, competition_key, event_id}]"
+    },
+    {
+      "parameters": {
+        "jsCode": "\n/* Ne réclame un score que pour les analyses dont le match est fini depuis\n * assez longtemps. Un score réclamé trop tôt renverrait un match en cours —\n * et un faux résultat vaut moins que pas de résultat du tout. */\n\nconst cfg = $('Config résultats').first().json;\nconst now = Date.now();\n\nconst brut = $input.all().map(i => i.json)\n  .filter(a => a && a.analysis_id && a.starts_at);\n\nconst murs = [];\nlet tropTot = 0, perimes = 0;\n\nfor (const a of brut) {\n  const t = Date.parse(a.starts_at);\n  if (!Number.isFinite(t)) continue;\n  const h = (now - t) / 3600000;\n  if (h < cfg.delaiApresCoupEnvoi_h) { tropTot++; continue; }\n  if (h > cfg.abandonApres_j * 24)   { perimes++; continue; }\n  murs.push({ ...a, heures_depuis_coup_envoi: Math.round(h * 10) / 10 });\n}\n\nmurs.sort((a, b) => a.heures_depuis_coup_envoi - b.heures_depuis_coup_envoi);\nconst lot = murs.slice(0, cfg.maxParCycle);\n\nconsole.log('En attente ' + brut.length + ' | mûrs ' + murs.length + ' | traités ' + lot.length +\n            ' (trop tôt ' + tropTot + ', périmés ' + perimes + ')');\n\nif (!lot.length) return [{ json: { skip: true, reason: 'aucun_resultat_mur' } }];\nreturn lot.map(a => ({ json: a }));\n"
+      },
+      "id": "3245ad58-9acd-55dc-afc2-3f6324e37d22",
+      "name": "Filtre — matchs mûrs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        200,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "e9bd07c5-56a7-518d-935f-a986591f31b2",
+              "leftValue": "={{ $json.skip === true }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "false",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "bdea61c1-9b7b-5d31-bfc8-bb9b57b89dde",
+      "name": "Quelque chose à résoudre ?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        400,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {
+          "reset": false
+        }
+      },
+      "id": "2beb7ef9-6882-56b8-bb9b-000e2a401552",
+      "name": "Boucle sur les analyses",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        600,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst l = $input.all().map(i => i.json);\nconst bilan = {\n  cycle_termine_a : new Date().toISOString(),\n  examines        : l.length,\n  resolus         : l.filter(x => x.trouve).length,\n  encore_en_attente: l.filter(x => !x.trouve).length\n};\nconsole.log(JSON.stringify(bilan));\nreturn [{ json: bilan }];\n"
+      },
+      "id": "3f74b840-9ec1-5acd-8a12-557e529e482c",
+      "name": "Bilan résultats",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        800,
+        120
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "d5c34cb3-6ad3-5317-bbbe-ed70a93647df",
+      "name": "Rien à résoudre",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        600,
+        460
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $('Config résultats').first().json.pronostatApi }}/score",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "fixture_key",
+              "value": "={{ $json.fixture_key }}"
+            },
+            {
+              "name": "event_id",
+              "value": "={{ $json.event_id }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "4624812b-c9ec-5dbc-b08a-f0b18eb4f356",
+      "name": "Score final",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        800,
+        340
+      ],
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 5000,
+      "alwaysOutputData": true,
+      "notes": "Délègue à DataHub.final_score() côté PronoStat plutôt que de rebrancher une API de scores dans n8n."
+    },
+    {
+      "parameters": {
+        "jsCode": "\n/* Normalisation du score renvoyé par PronoStat (DataHub.final_score()).\n * Un score introuvable N'EST PAS un échec : l'analyse reste en attente et\n * sera reprise au cycle suivant. Compter une absence de score comme un\n * échec fausserait le backtesting. */\n\nconst r = $input.first().json ?? {};\nconst a = $('Filtre — matchs mûrs').first().json;\n\nconst h = Number(r.home_goals);\nconst v = Number(r.away_goals);\nconst complet = r.status === 'finished' && Number.isFinite(h) && Number.isFinite(v);\n\nreturn [{ json: {\n  analysis_id : a.analysis_id,\n  fixture_key : a.fixture_key,\n  home        : a.home,\n  away        : a.away,\n  trouve      : complet,\n  home_goals  : complet ? h : null,\n  away_goals  : complet ? v : null,\n  finished_at : complet ? (r.finished_at ?? new Date().toISOString()) : null,\n  source      : r.source ?? null,\n  note        : complet ? null : 'score indisponible — reste en attente, jamais compté comme échec'\n}}];\n"
+      },
+      "id": "3309a751-e804-513e-8577-79c834d6b1c2",
+      "name": "Score — normalisation",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1000,
+        340
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "7cca4296-6cb9-5a77-95e0-76ddc27c6db6",
+              "leftValue": "={{ $json.trouve }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "d186973b-3cbe-5e2a-aef1-2e768d91a371",
+      "name": "Score trouvé ?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        340
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Config résultats').first().json.pronostatApi }}/result",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ analysis_id: $json.analysis_id, home_goals: $json.home_goals, away_goals: $json.away_goals, finished_at: $json.finished_at }) }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "c9de16c4-d197-571a-991a-9ac4b085ce38",
+      "name": "POST /result",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1400,
+        240
+      ],
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 8000,
+      "alwaysOutputData": true,
+      "notes": "Déclenche resolve_pending() et le recalcul de Brier / log loss / calibration côté moteur."
+    },
+    {
+      "parameters": {},
+      "id": "a87eb6f1-d613-52da-99b3-808d00dc6b60",
+      "name": "Laissé en attente",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1400,
+        440
+      ],
+      "notes": "Ni erreur ni échec : simple absence de donnée. Repris au cycle suivant."
+    }
+  ],
+  "connections": {
+    "Cron — toutes les 6 h": {
+      "main": [
+        [
+          {
+            "node": "Config résultats",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config résultats": {
+      "main": [
+        [
+          {
+            "node": "Analyses en attente",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analyses en attente": {
+      "main": [
+        [
+          {
+            "node": "Filtre — matchs mûrs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filtre — matchs mûrs": {
+      "main": [
+        [
+          {
+            "node": "Quelque chose à résoudre ?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Quelque chose à résoudre ?": {
+      "main": [
+        [
+          {
+            "node": "Boucle sur les analyses",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Rien à résoudre",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Boucle sur les analyses": {
+      "main": [
+        [
+          {
+            "node": "Bilan résultats",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Score final",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Score final": {
+      "main": [
+        [
+          {
+            "node": "Score — normalisation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Score — normalisation": {
+      "main": [
+        [
+          {
+            "node": "Score trouvé ?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Score trouvé ?": {
+      "main": [
+        [
+          {
+            "node": "POST /result",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Laissé en attente",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "POST /result": {
+      "main": [
+        [
+          {
+            "node": "Boucle sur les analyses",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Laissé en attente": {
+      "main": [
+        [
+          {
+            "node": "Boucle sur les analyses",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "saveExecutionProgress": true,
+    "executionTimeout": 1800,
+    "timezone": "Europe/Paris"
+  },
+  "tags": [],
+  "pinData": {}
+}

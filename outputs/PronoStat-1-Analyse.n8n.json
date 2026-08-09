@@ -1,0 +1,1098 @@
+{
+  "name": "PronoStat 1 — Découverte, recherche, analyse",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 6
+            }
+          ]
+        }
+      },
+      "id": "7b91a374-af7f-5fae-8190-d13b9111dfff",
+      "name": "Cron — toutes les 6 h",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -560,
+        380
+      ],
+      "notes": "Cadence de base. Le quota, pas l'horloge, décide de ce qui est réellement analysé."
+    },
+    {
+      "parameters": {
+        "jsCode": "\n/* ═══════════════════════════════════════════════════════════════════════\n * PronoStat — configuration centrale du cycle.\n * AUCUN secret ici : les clés d'API vivent dans les credentials n8n.\n * Ce nœud ne porte que des paramètres de pilotage, lisibles et versionnables.\n * ═══════════════════════════════════════════════════════════════════════ */\n\nconst config = {\n\n  /* ---- Points d'entrée ------------------------------------------------ */\n  // ⚠ À REMPLACER par l'URL réelle du service FastAPI (étape 1 du plan).\n  pronostatApi : 'https://pronostat-api.example.com',\n  oddsApiBase  : 'https://api.the-odds-api.com/v4',\n  serperUrl    : 'https://google.serper.dev/search',\n  llmUrl       : 'https://api.anthropic.com/v1/messages',\n  llmModel     : 'claude-sonnet-4-5',\n\n  /* ---- Budget de cotes ------------------------------------------------\n   * CORRECTION au document de conception :\n   * le coût The Odds API n'est pas « 3 crédits par récupération » dans\n   * l'absolu — c'est  nb_marchés × nb_régions.\n   *   3 marchés × 1 région  = 3 crédits   ← configuration retenue\n   *   3 marchés × 2 régions = 6 crédits   ← doublerait la facture\n   * Ne jamais ajouter de région sans recalculer le tableau de charge.\n   * -------------------------------------------------------------------- */\n  oddsRegions           : 'eu',\n  oddsMarkets           : 'h2h,totals,spreads',\n  creditsPerMatch       : 3,\n  reserveCredits        : 30,     // réserve intouchable, jamais engagée\n  cycleHours            : 6,      // doit refléter le Cron\n\n  /* Deux politiques d'allocation, au choix :\n   *\n   * 'share' — la règle du livrable B : au plus 20 % du quota restant par\n   *   cycle. Fidèle à la spécification, mais avec 4 cycles/jour elle\n   *   consomme ≈ 59 % du budget utilisable DÈS LE PREMIER JOUR\n   *   (décroissance géométrique 0,8^n). Le mois se joue en une semaine.\n   *\n   * 'pace'  — répartit le budget utilisable sur le temps restant avant la\n   *   remise à zéro du quota (`period_resets_at`). L'allocation par cycle\n   *   étant souvent fractionnaire (2,6 crédits pour 269 restants sur 23 j),\n   *   elle est ACCUMULÉE : un match est financé dès que le cumul atteint\n   *   3 crédits. Débit régulier, aucun à-coup.\n   *\n   * Recommandation : 'pace'. Une quatrième actualisation d'un match déjà vu\n   * vaut moins qu'une première analyse d'un match jamais couvert — c'est\n   * exactement l'argument du document de conception, appliqué au temps.   */\n  allocationMode        : 'share',\n  maxQuotaSharePerCycle : 0.20,   // utilisé par le mode 'share'\n\n  /* ---- Fenêtres d'analyse (heures avant le coup d'envoi) --------------\n   * Une affiche n'est ré-analysée que si elle a CHANGÉ de fenêtre.\n   * C'est plus économe que la règle « < 24 h » du nœud 6 : un match vu\n   * à J-3 il y a 25 h n'est pas ré-analysé tant qu'il n'atteint pas J-1.\n   * -------------------------------------------------------------------- */\n  windows: [\n    { name: 'PRE_MATCH', maxHours: 6,   weight: 1.00 },\n    { name: 'J-1',       maxHours: 30,  weight: 0.75 },\n    { name: 'J-3',       maxHours: 84,  weight: 0.50 },\n    { name: 'J-7',       maxHours: 192, weight: 0.30 }\n  ],\n\n  /* ---- Compétitions ---------------------------------------------------\n   * `key` doit exister dans GET /v4/sports (endpoint GRATUIT).\n   * Le nœud « Compétitions retenues » fait l'intersection : une clé\n   * périmée est écartée avec un avertissement, jamais devinée.\n   * `importance` ∈ ]0,1] — pondère la priorité.\n   * -------------------------------------------------------------------- */\n  competitions: [\n    { key: 'soccer_epl',                    sport: 'football',   label: 'Premier League',      importance: 1.00 },\n    { key: 'soccer_spain_la_liga',          sport: 'football',   label: 'La Liga',             importance: 0.95 },\n    { key: 'soccer_italy_serie_a',          sport: 'football',   label: 'Serie A',             importance: 0.90 },\n    { key: 'soccer_germany_bundesliga',     sport: 'football',   label: 'Bundesliga',          importance: 0.90 },\n    { key: 'soccer_france_ligue_one',       sport: 'football',   label: 'Ligue 1',             importance: 0.85 },\n    { key: 'soccer_uefa_champs_league',     sport: 'football',   label: 'Ligue des champions', importance: 1.00 },\n    { key: 'soccer_uefa_europa_league',     sport: 'football',   label: 'Ligue Europa',        importance: 0.70 },\n    { key: 'soccer_netherlands_eredivisie', sport: 'football',   label: 'Eredivisie',          importance: 0.60 },\n    { key: 'soccer_portugal_primeira_liga', sport: 'football',   label: 'Primeira Liga',       importance: 0.60 },\n    { key: 'soccer_england_efl_cham',       sport: 'football',   label: 'Championship',        importance: 0.55 },\n    { key: 'soccer_brazil_campeonato',      sport: 'football',   label: 'Brasileirão',         importance: 0.55 },\n    { key: 'soccer_usa_mls',                sport: 'football',   label: 'MLS',                 importance: 0.50 },\n    { key: 'basketball_nba',                sport: 'basketball', label: 'NBA',                 importance: 0.85 },\n    { key: 'basketball_euroleague',         sport: 'basketball', label: 'EuroLeague',          importance: 0.55 },\n    { key: 'icehockey_nhl',                 sport: 'icehockey',  label: 'NHL',                 importance: 0.70 },\n    { key: 'americanfootball_nfl',          sport: 'nfl',        label: 'NFL',                 importance: 0.80 },\n    { key: 'baseball_mlb',                  sport: 'baseball',   label: 'MLB',                 importance: 0.50 },\n    { key: 'mma_mixed_martial_arts',        sport: 'mma',        label: 'MMA',                 importance: 0.40 }\n  ],\n\n  /* ---- Recherche ------------------------------------------------------ */\n  searchesPerMatch            : 10,   // ≈ 250 matchs/mois sur le palier Serper gratuit\n  serperResultsPerQuery       : 8,\n  minSourcesForSensitiveField : 2,\n  freshnessHours              : 24    // plancher dur, en plus de la règle de fenêtre\n};\n\nreturn [{ json: config }];\n"
+      },
+      "id": "32813243-e1f1-57f1-b59d-dd5756152429",
+      "name": "Config",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -360,
+        380
+      ],
+      "notes": "Seul nœud à modifier pour changer d'URL, de compétitions ou de politique de budget."
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.pronostatApi }}/quota",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "e7f7f323-2a39-54bc-9216-745db9168eef",
+      "name": "Quota PronoStat",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -160,
+        380
+      ],
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000,
+      "alwaysOutputData": true,
+      "notes": "GET /quota → {odds_credits_remaining, odds_credits_limit, period_resets_at, recent_analyses[]}. Injoignable ⇒ cycle reporté, aucun crédit engagé à l'aveugle."
+    },
+    {
+      "parameters": {
+        "url": "={{ $('Config').first().json.oddsApiBase }}/sports",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpQueryAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "all",
+              "value": "false"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 20000
+        }
+      },
+      "id": "f466163f-9483-5ff3-89dd-f9dc71d2529c",
+      "name": "Sports actifs (gratuit)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        40,
+        380
+      ],
+      "credentials": {
+        "httpQueryAuth": {
+          "id": "PLACEHOLDER_ODDS",
+          "name": "The Odds API — apiKey (query)"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "notes": "GET /v4/sports — ENDPOINT GRATUIT, 0 crédit. Valide les clés de compétition avant toute dépense."
+    },
+    {
+      "parameters": {
+        "jsCode": "\n/* Intersection entre les compétitions configurées et celles réellement\n * actives chez The Odds API. GET /v4/sports est GRATUIT : cette\n * vérification ne coûte rien et supprime toute clé périmée du chemin\n * d'exécution. On n'invente jamais une clé. */\n\nconst cfg = $('Config').first().json;\n\nconst actives = new Set(\n  $input.all()\n    .map(i => i.json)\n    .filter(s => s && s.key && s.active !== false)\n    .map(s => s.key)\n);\n\nconst retenues = [];\nconst ecartees = [];\nfor (const c of cfg.competitions) {\n  (actives.has(c.key) ? retenues : ecartees).push(c);\n}\n\nif (ecartees.length) {\n  console.warn(\n    'Clés absentes ou inactives dans /v4/sports, écartées de ce cycle : ' +\n    ecartees.map(c => c.key).join(', ')\n  );\n}\nif (!retenues.length) {\n  throw new Error(\n    'Aucune compétition configurée n\\'est active chez The Odds API. ' +\n    'Vérifier la liste `competitions` du nœud Config contre GET /v4/sports.'\n  );\n}\n\nreturn retenues.map(c => ({ json: c }));\n"
+      },
+      "id": "18edef2e-8ea0-5e19-bacc-e0d136419e4a",
+      "name": "Compétitions retenues",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        380
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $('Config').first().json.oddsApiBase }}/sports/{{ $json.key }}/events",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpQueryAuth",
+        "options": {
+          "timeout": 20000,
+          "batching": {
+            "batch": {
+              "batchSize": 4,
+              "batchInterval": 800
+            }
+          }
+        }
+      },
+      "id": "6b44d17f-55f7-53ee-8466-a48ac0f7a8c4",
+      "name": "Calendriers (gratuit)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        380
+      ],
+      "credentials": {
+        "httpQueryAuth": {
+          "id": "PLACEHOLDER_ODDS",
+          "name": "The Odds API — apiKey (query)"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000,
+      "notes": "GET /v4/sports/{key}/events — ENDPOINT GRATUIT, 0 crédit. AGENT 1."
+    },
+    {
+      "parameters": {
+        "jsCode": "\n/* Normalisation + déduplication des affiches.\n * Rapprochement flou de noms (coefficient de Dice sur bigrammes de\n * caractères) BORNÉ par la date de coup d'envoi (± 6 h), comme spécifié\n * pour l'agent 1. Sans la borne temporelle, deux confrontations de la même\n * paire à des dates différentes fusionneraient à tort. */\n\nconst cfg   = $('Config').first().json;\nconst byKey = new Map(cfg.competitions.map(c => [c.key, c]));\n\nconst strip = (s) => String(s ?? '')\n  .normalize('NFD').replace(/[̀-ͯ]/g, '')   // retire les diacritiques\n  .toLowerCase()\n  .replace(/\\b(fc|cf|afc|sc|ac|as|ss|ssc|cd|ud|rc|sv|vfl|vfb|tsg|fk|bk|if|club|calcio)\\b/g, ' ')\n  .replace(/[^a-z0-9 ]/g, ' ')\n  .replace(/\\s+/g, ' ')\n  .trim();\n\nconst bigrams = (s) => {\n  const t = ' ' + s + ' ';\n  const out = new Set();\n  for (let i = 0; i < t.length - 1; i++) out.add(t.slice(i, i + 2));\n  return out;\n};\n\nconst dice = (a, b) => {\n  const A = bigrams(a), B = bigrams(b);\n  if (!A.size || !B.size) return 0;\n  let inter = 0;\n  for (const g of A) if (B.has(g)) inter++;\n  return (2 * inter) / (A.size + B.size);\n};\n\nconst SEUIL = 0.82;\nconst FENETRE_MS = 6 * 3600 * 1000;\n\nconst brut = $input.all()\n  .map(i => i.json)\n  .filter(e => e && e.id && e.home_team && e.away_team && e.commence_time);\n\nconst gardes = [];\nfor (const e of brut) {\n  const comp = byKey.get(e.sport_key);\n  if (!comp) continue;                       // compétition non configurée : ignorée\n\n  const t = Date.parse(e.commence_time);\n  if (!Number.isFinite(t)) continue;\n\n  const h = strip(e.home_team);\n  const a = strip(e.away_team);\n  if (!h || !a) continue;\n\n  const doublon = gardes.find(k =>\n    Math.abs(k._t - t) <= FENETRE_MS && (\n      (dice(k._h, h) >= SEUIL && dice(k._a, a) >= SEUIL) ||\n      (dice(k._h, a) >= SEUIL && dice(k._a, h) >= SEUIL)   // inversion domicile/extérieur\n    )\n  );\n  if (doublon) {\n    if (!doublon.sources.includes(e.sport_key)) doublon.sources.push(e.sport_key);\n    continue;\n  }\n\n  gardes.push({\n    _h: h, _a: a, _t: t,\n    event_id         : e.id,\n    sport            : comp.sport,\n    competition_key  : comp.key,\n    competition_label: comp.label,\n    importance       : comp.importance,\n    home             : e.home_team,\n    away             : e.away_team,\n    starts_at        : e.commence_time,\n    fixture_key      : comp.key + '|' + h + '|' + a + '|' + new Date(t).toISOString().slice(0, 10),\n    sources          : [e.sport_key]\n  });\n}\n\nconsole.log('Affiches brutes : ' + brut.length + ' — après déduplication : ' + gardes.length);\nreturn gardes.map(g => ({ json: g }));\n"
+      },
+      "id": "7a6fad4d-2846-53ee-8971-08aee233931a",
+      "name": "Normalisation des affiches",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        640,
+        380
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "\n/* AGENT 2 — Priorisation. Le cœur de la conception.\n *\n * Le quota commande, pas le calendrier. Ce nœud ne sélectionne JAMAIS plus\n * de matchs que le budget du cycle ne permet d'en payer en cotes.\n *\n * priorité = poids_fenêtre × importance_compétition × ancienneté\n * (multiplicatif, conformément au livrable B)\n *\n * Si le quota est illisible, le cycle est REPORTÉ. Aucun crédit n'est\n * engagé à l'aveugle : une estimation fausse coûterait des crédits réels. */\n\nconst cfg = $('Config').first().json;\n\nlet q = {};\ntry { q = $('Quota PronoStat').first().json ?? {}; } catch (e) { q = {}; }\n\nconst restant = Number(q.odds_credits_remaining);\nif (!Number.isFinite(restant)) {\n  return [{ json: {\n    skip   : true,\n    reason : 'quota_indisponible',\n    detail : 'GET /quota n\\'a pas renvoyé odds_credits_remaining. Cycle reporté.'\n  }}];\n}\n\nconst utilisable = Math.max(0, restant - cfg.reserveCredits);\n\nlet budget, mode = cfg.allocationMode ?? 'share';\nconst reset = Date.parse(q.period_resets_at ?? '');\n\nif (mode === 'pace' && Number.isFinite(reset) && reset > Date.now()) {\n  /* Débit régulier jusqu'à la remise à zéro du quota. L'allocation par\n   * cycle est presque toujours fractionnaire : on l'accumule dans les\n   * données statiques plutôt que de l'arrondir à zéro à chaque passage. */\n  const heuresRestantes = (reset - Date.now()) / 3600000;\n  const st = $getWorkflowStaticData('global');\n  const parCycle = utilisable * (cfg.cycleHours / Math.max(cfg.cycleHours, heuresRestantes));\n  st.paceAccu = (Number(st.paceAccu) || 0) + parCycle;\n  budget = Math.floor(st.paceAccu);\n  st.paceAccu -= budget;\n} else {\n  if (mode === 'pace') {\n    mode = 'share (repli)';   // period_resets_at absent : on ne devine pas la date\n    console.warn('Mode pace demandé mais period_resets_at absent ou passé — repli sur share.');\n  }\n  budget = Math.floor(utilisable * cfg.maxQuotaSharePerCycle);\n}\n\nconst creneaux = Math.floor(budget / cfg.creditsPerMatch);\n\nif (creneaux < 1) {\n  return [{ json: {\n    skip    : true,\n    reason  : 'budget_insuffisant',\n    restant : restant,\n    reserve : cfg.reserveCredits,\n    detail  : 'Quota trop bas pour financer une seule affiche ce cycle.'\n  }}];\n}\n\n/* Journal des analyses passées, fourni par GET /quota */\nconst journal = Array.isArray(q.recent_analyses) ? q.recent_analyses : [];\nconst couvert = new Set();\nconst vuLe    = new Map();\nfor (const a of journal) {\n  if (!a || !a.fixture_key) continue;\n  if (a.window) couvert.add(a.fixture_key + '@' + a.window);\n  const t = Date.parse(a.analysed_at);\n  if (Number.isFinite(t)) vuLe.set(a.fixture_key, Math.max(vuLe.get(a.fixture_key) ?? 0, t));\n}\n\nconst now = Date.now();\nconst fenetrePour = (h) => cfg.windows.find(w => h <= w.maxHours) ?? null;\n\nconst notes = [];\nlet horsFenetre = 0, dejaCouvert = 0, tropFrais = 0;\n\nfor (const it of $input.all()) {\n  const m = it.json;\n  if (!m || !m.starts_at) continue;\n\n  const h = (Date.parse(m.starts_at) - now) / 3600000;\n  if (!(h > 0)) { horsFenetre++; continue; }          // déjà commencé\n\n  const w = fenetrePour(h);\n  if (!w) { horsFenetre++; continue; }                // au-delà de J-7\n\n  if (couvert.has(m.fixture_key + '@' + w.name)) { dejaCouvert++; continue; }\n\n  const dernier = vuLe.get(m.fixture_key);\n  const ageH    = dernier ? (now - dernier) / 3600000 : Infinity;\n  if (ageH < cfg.freshnessHours) { tropFrais++; continue; }\n\n  const anciennete = dernier ? Math.min(1, ageH / 72) : 1;\n  const score = w.weight\n              * (0.35 + 0.65 * Number(m.importance ?? 0.5))\n              * (0.50 + 0.50 * anciennete);\n\n  notes.push({\n    ...m,\n    window           : w.name,\n    hours_to_kickoff : Math.round(h * 10) / 10,\n    priority         : Math.round(score * 1000) / 1000\n  });\n}\n\nnotes.sort((a, b) => (b.priority - a.priority) || (a.hours_to_kickoff - b.hours_to_kickoff));\nconst choisis = notes.slice(0, creneaux);\n\nconsole.log(\n  'Quota ' + restant + ' | mode ' + mode + ' | budget cycle ' + budget + ' crédits | ' + creneaux + ' créneaux | ' +\n  'candidats ' + notes.length + ' | retenus ' + choisis.length +\n  ' (hors fenêtre ' + horsFenetre + ', fenêtre déjà couverte ' + dejaCouvert + ', trop frais ' + tropFrais + ')'\n);\n\nif (!choisis.length) {\n  return [{ json: { skip: true, reason: 'rien_a_analyser', candidats: notes.length } }];\n}\n\nreturn choisis.map((m, i) => ({ json: {\n  ...m,\n  _cycle: { mode, budget_credits: budget, creneaux, rang: i + 1, quota_restant: restant }\n}}));\n"
+      },
+      "id": "b22abe4c-d233-5e0b-ad61-d1c7059108a7",
+      "name": "Priorisation (budget quota)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        840,
+        380
+      ],
+      "notes": "AGENT 2. Sélectionne au plus floor(((quota − réserve) × 20 %) / 3) affiches."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "3cf90cac-2f87-55ca-9ad7-5ef932d3f200",
+              "leftValue": "={{ $json.skip === true }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "false",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "92548a47-a89a-54c6-80ae-51c6bcd5b346",
+      "name": "Des matchs retenus ?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1040,
+        380
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "\n/* Le cycle n'engage rien. Ce n'est pas une erreur : c'est le comportement\n * attendu quand le quota est bas ou que rien n'a changé depuis le dernier\n * passage. Tracé pour l'audit. */\nconst j = $input.first().json;\nconsole.log('Cycle sans action — motif : ' + (j.reason ?? 'inconnu'));\nreturn [{ json: { cycle_skipped: true, at: new Date().toISOString(), ...j } }];\n"
+      },
+      "id": "4c138436-cd12-5cf9-a170-dd29009b1d0d",
+      "name": "Cycle reporté",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1240,
+        560
+      ]
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {
+          "reset": false
+        }
+      },
+      "id": "aa6bfefd-d341-525e-a45e-df707c7a7cce",
+      "name": "Boucle sur les matchs",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        1240,
+        340
+      ],
+      "notes": "Sortie 0 = « done » (bilan) · Sortie 1 = « loop » (traitement d'un match)."
+    },
+    {
+      "parameters": {
+        "jsCode": "\n/* Sortie « done » de la boucle : bilan du cycle. */\nconst st = $getWorkflowStaticData('global');\nconst lignes = $input.all().map(i => i.json);\nconst bilan = {\n  cycle_termine_a       : new Date().toISOString(),\n  matchs_traites        : lignes.length,\n  publiables            : lignes.filter(r => r.publiable).length,\n  bloques               : lignes.filter(r => !r.publiable).length,\n  credits_cotes_restants: st.oddsCreditsRemaining ?? null,\n  credits_maj_le        : st.oddsCreditsUpdatedAt ?? null\n};\nconsole.log(JSON.stringify(bilan));\nreturn [{ json: bilan }];\n"
+      },
+      "id": "fb7e08b5-ddee-5221-8239-f9d7ee2c6c12",
+      "name": "Bilan du cycle",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1440,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "\n/* Coupe-circuit intra-cycle.\n * Le budget a été calculé au démarrage ; une exécution longue peut le\n * périmer. On relit ici le compteur réel renvoyé par The Odds API à\n * l'itération précédente (en-tête x-requests-remaining, persisté dans les\n * données statiques du workflow). Si la réserve est menacée, on s'arrête —\n * AVANT de dépenser des requêtes Serper sur un match qu'on ne pourra pas\n * coter. */\n\nconst cfg = $('Config').first().json;\nconst st  = $getWorkflowStaticData('global');\nconst m   = $input.first().json;\n\nconst live = Number(st.oddsCreditsRemaining);\nconst connu = Number.isFinite(live);\nconst ok = !connu || live >= (cfg.reserveCredits + cfg.creditsPerMatch);\n\nif (!ok) console.warn('Coupe-circuit : ' + live + ' crédits restants, réserve ' + cfg.reserveCredits + '. Match ' + m.fixture_key + ' reporté.');\n\nreturn [{ json: { ...m, _guard: { ok, live_credits: connu ? live : null } } }];\n"
+      },
+      "id": "98b7fd29-e495-53ab-9642-e566944214b9",
+      "name": "Garde-fou quota",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1440,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "4030bddf-543a-5376-a8d7-b35dbe9692dd",
+              "leftValue": "={{ $json._guard.ok }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "b465e11a-6ad8-560c-aa82-3c6d1576d231",
+      "name": "Budget encore disponible ?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1640,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "e03a7c4e-541c-5a2a-821d-19a4abbfd082",
+              "leftValue": "={{ $('Config').first().json.searchesPerMatch > 0 }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "2cf38f0c-e928-5fe0-a6b7-db788a0fed1c",
+      "name": "Recherche web activée ?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1840,
+        400
+      ],
+      "notes": "Permet l'étape 3 du plan G : valider l'orchestration et le budget AVANT d'ajouter la couche de recherche."
+    },
+    {
+      "parameters": {
+        "jsCode": "\n/* Mode « sans recherche web » (étape 3 du plan G) : searchesPerMatch = 0.\n *\n * Le moteur tourne sur ses seules sources internes. Tous les champs de\n * recherche sont explicitement marqués non_trouve AVEC leur motif : c'est le\n * repli prévu au livrable E, pas une donnée manquante silencieuse. La\n * confiance sera abaissée côté PronoStat, ce qui est le comportement voulu. */\n\nconst CHAMPS = ['form_home', 'form_away', 'injuries_home', 'injuries_away',\n                'lineups', 'h2h', 'standings', 'context'];\nconst m = $input.first().json;\nconst research = {};\nfor (const c of CHAMPS) {\n  research[c] = { status: 'non_trouve', reason: 'recherche web désactivée (searchesPerMatch = 0)' };\n}\nconsole.log('Sans recherche web — ' + m.fixture_key);\nreturn [{ json: { ...m, research, _llm: { ok: false, mode: 'sans_recherche' } } }];\n"
+      },
+      "id": "88799654-7eb8-5fda-90bd-73a6012ddf2e",
+      "name": "Recherche désactivée",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2040,
+        560
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "\n/* Point de convergence des deux branches (avec / sans recherche web).\n * Existe pour que les nœuds en aval disposent d'UNE référence stable,\n * quel que soit le chemin emprunté. Ne transforme rien. */\nreturn $input.all().map(i => ({ json: i.json }));\n"
+      },
+      "id": "f210f9c7-bb85-551c-92ed-532128aab8ad",
+      "name": "Dossier de recherche",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2840,
+        340
+      ],
+      "notes": "Convergence des deux branches. Référence stable pour les nœuds en aval."
+    },
+    {
+      "parameters": {
+        "jsCode": "\n/* AGENT 3 (1/3) — construction des requêtes.\n * Une requête = un item de sortie. Le nœud Serper qui suit s'exécute une\n * fois par item. Les gabarits sont adaptés au sport : chercher « xG » pour\n * un match de NBA gaspillerait une requête. */\n\nconst cfg = $('Config').first().json;\nconst m   = $input.first().json;\nconst D   = String(m.starts_at).slice(0, 10);\n\nconst GABARITS = {\n  football: [\n    '{H} injury news suspensions team news',\n    '{A} injury news suspensions team news',\n    '{H} vs {A} predicted lineup {D}',\n    '{H} last 5 matches results form',\n    '{A} last 5 matches results form',\n    '{H} vs {A} head to head record',\n    '{C} table standings',\n    '{H} vs {A} preview {D}',\n    '{H} xG expected goals per match season stats',\n    '{A} xG expected goals per match season stats'\n  ],\n  basketball: [\n    '{H} injury report {D}',\n    '{A} injury report {D}',\n    '{H} last 5 games results',\n    '{A} last 5 games results',\n    '{H} offensive defensive rating pace season',\n    '{A} offensive defensive rating pace season',\n    '{H} vs {A} head to head this season',\n    '{C} standings',\n    '{H} starting lineup rotation news',\n    '{A} starting lineup rotation news'\n  ],\n  icehockey: [\n    '{H} injury report lineup {D}',\n    '{A} injury report lineup {D}',\n    '{H} starting goalie confirmed {D}',\n    '{A} starting goalie confirmed {D}',\n    '{H} last 5 games results',\n    '{A} last 5 games results',\n    '{H} power play penalty kill percentage season',\n    '{A} power play penalty kill percentage season',\n    '{H} vs {A} head to head',\n    '{C} standings'\n  ],\n  default: [\n    '{H} vs {A} preview {D}',\n    '{H} injury news {D}',\n    '{A} injury news {D}',\n    '{H} recent form results',\n    '{A} recent form results',\n    '{H} vs {A} head to head record',\n    '{C} standings {D}',\n    '{H} vs {A} statistics'\n  ]\n};\n\nconst gabarit = GABARITS[m.sport] ?? GABARITS.default;\n\nreturn gabarit.slice(0, cfg.searchesPerMatch).map((t, i) => ({\n  json: {\n    _match : m,\n    slot   : i,\n    q      : t.replace(/\\{H\\}/g, m.home)\n              .replace(/\\{A\\}/g, m.away)\n              .replace(/\\{C\\}/g, m.competition_label)\n              .replace(/\\{D\\}/g, D)\n  }\n}));\n"
+      },
+      "id": "44cc519c-41d2-578c-b5ea-bda3006f7251",
+      "name": "Requêtes de recherche",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2040,
+        260
+      ],
+      "notes": "AGENT 3 · 1/3 — un item = une requête Serper."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Config').first().json.serperUrl }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ q: $json.q, num: $('Config').first().json.serperResultsPerQuery, hl: 'en' }) }}",
+        "options": {
+          "timeout": 25000,
+          "batching": {
+            "batch": {
+              "batchSize": 5,
+              "batchInterval": 1000
+            }
+          }
+        }
+      },
+      "id": "d9071337-2051-56e9-84a2-3d042004afdf",
+      "name": "Serper — recherche",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2240,
+        260
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "PLACEHOLDER_SERPER",
+          "name": "Serper — X-API-KEY"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 2000,
+      "alwaysOutputData": true,
+      "notes": "Credential Header Auth : nom = X-API-KEY, valeur = votre clé Serper. Échec ⇒ on continue avec moins de sources, la confiance baissera."
+    },
+    {
+      "parameters": {
+        "jsCode": "\n/* AGENT 3 (2/3) — agrégation des résultats bruts + construction du prompt.\n *\n * Le nœud HTTP remplace le JSON de l'item : `_match` et `q` sont perdus.\n * On les récupère par index depuis le nœud amont — l'ordre est préservé,\n * un item de requête produit un item de réponse.\n *\n * Le prompt est construit ICI, pas dans le corps du nœud HTTP : cela évite\n * un échappement illisible et rend le prompt relisible dans l'exécution. */\n\nconst reqs = $('Requêtes de recherche').all().map(i => i.json);\nconst res  = $input.all().map(i => i.json);\nconst m    = reqs[0]._match;\n\nif (reqs.length !== res.length) {\n  console.warn('Appariement requête/réponse imparfait : ' + reqs.length +\n               ' requêtes pour ' + res.length + ' réponses. Appariement par index, au mieux.');\n}\n\nconst hote = (u) => { try { return new URL(u).hostname.replace(/^www\\./, ''); } catch (e) { return String(u); } };\n\nlet echecs = 0;\nconst dossier = res.map((r, i) => {\n  const q = reqs[i]?.q ?? '(requête inconnue)';\n  if (!r || r.error) { echecs++; return { requete: q, erreur: 'recherche indisponible', resultats: [] }; }\n  const organic = Array.isArray(r.organic) ? r.organic.slice(0, 6) : [];\n  return {\n    requete   : q,\n    answerBox : r.answerBox?.snippet ?? null,\n    resultats : organic.map(o => ({\n      source  : hote(o.link),\n      titre   : o.title,\n      extrait : o.snippet,\n      date    : o.date ?? null,\n      url     : o.link\n    }))\n  };\n});\n\nconst systemPrompt = [\n  'Tu es un EXTRACTEUR de données factuelles pour un moteur statistique.',\n  'Tu ne prédis rien. Tu ne conseilles rien. Tu ne produis AUCUN pronostic,',\n  'AUCUNE probabilité, AUCUNE cote. Le calcul se fait ailleurs.',\n  '',\n  'Tu ne renvoies QUE du JSON valide : pas de texte avant, pas de texte après,',\n  'pas de bloc de code markdown.',\n  '',\n  'Chaque champ est un objet portant obligatoirement une clé \"status\".',\n  'Les cinq statuts autorisés, et eux seuls :',\n  '  \"disponible\"          — information trouvée, sourcée',\n  '  \"non_trouve\"          — les recherches n\\'ont rien donné',\n  '  \"non_publie\"          — l\\'information n\\'existe pas encore (ex. compositions)',\n  '  \"source_inaccessible\" — source identifiée mais contenu non lisible',\n  '  \"contradictoire\"      — au moins deux sources s\\'opposent',\n  '',\n  'RÈGLES ABSOLUES :',\n  '1. N\\'invente JAMAIS une valeur. Au moindre doute : \"non_trouve\".',\n  '2. N\\'harmonise JAMAIS deux sources qui se contredisent. Statut',\n  '   \"contradictoire\" et clé \"conflict\" listant chaque version avec sa source.',\n  '3. Toute valeur \"disponible\" porte une clé \"sources\" (noms de domaine)',\n  '   non vide et une clé \"collected_at\" (ISO 8601).',\n  '4. Ne déduis pas une statistique d\\'une autre. Aucun calcul.',\n  '5. Une absence de résultat n\\'est pas un échec : c\\'est une information.'\n].join('\\n');\n\nconst schema = {\n  form_home     : '{status, value:{last5:[\"W\",\"D\",\"L\",...], goals_for, goals_against}, sources[], collected_at}',\n  form_away     : 'idem form_home',\n  injuries_home : '{status, value:[{player, issue, expected_return}], sources[], collected_at}',\n  injuries_away : 'idem injuries_home',\n  lineups       : '{status, value:{home:[], away:[]}, sources[], collected_at}',\n  h2h           : '{status, value:[{date, home, away, score}], sources[], collected_at}',\n  standings     : '{status, value:{home_rank, away_rank, home_points, away_points}, sources[], collected_at}',\n  context       : '{status, value:{stakes, travel, rest_days, weather, notes}, sources[], collected_at}'\n};\n\nconst userPrompt = [\n  'MATCH : ' + m.home + ' vs ' + m.away,\n  'Compétition : ' + m.competition_label + ' (' + m.sport + ')',\n  'Coup d\\'envoi : ' + m.starts_at,\n  'Fenêtre d\\'analyse : ' + m.window,\n  '',\n  'RÉSULTATS DE RECHERCHE (' + dossier.length + ' requêtes, ' + echecs + ' en échec) :',\n  JSON.stringify(dossier, null, 1),\n  '',\n  'Renvoie un objet JSON avec EXACTEMENT ces clés :',\n  JSON.stringify(schema, null, 1),\n  '',\n  'Rappel : le statut est obligatoire sur chaque clé. Aucune valeur inventée.'\n].join('\\n');\n\nreturn [{ json: {\n  ...m,\n  systemPrompt,\n  userPrompt,\n  _search: { requetes: dossier.length, echecs }\n}}];\n"
+      },
+      "id": "08cdef55-a07d-5197-9815-c5c029621c34",
+      "name": "Agrégation & prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2440,
+        260
+      ],
+      "notes": "AGENT 3 · 2/3 — le prompt est construit ici, pas dans le corps HTTP."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Config').first().json.llmUrl }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "anthropicApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: $('Config').first().json.llmModel, max_tokens: 4000, temperature: 0, system: $json.systemPrompt, messages: [ { role: 'user', content: $json.userPrompt } ] }) }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "87168028-2795-59ba-96bd-373ce5d5e451",
+      "name": "LLM — extraction structurée",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2640,
+        260
+      ],
+      "credentials": {
+        "anthropicApi": {
+          "id": "PLACEHOLDER_LLM",
+          "name": "Anthropic API"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 5000,
+      "alwaysOutputData": true,
+      "notes": "Extraction uniquement — le prompt système interdit explicitement tout pronostic. Pour un autre fournisseur : changer l'URL, le credential et le chemin de lecture dans le nœud suivant."
+    },
+    {
+      "parameters": {
+        "jsCode": "\n/* AGENT 3 (3/3) — validation de l'extraction.\n *\n * Un LLM peut renvoyer du texte hors JSON, un statut inventé, ou rien.\n * Aucune de ces trois défaillances ne doit polluer le moteur : tout champ\n * qui ne respecte pas le contrat est REMPLACÉ par \"non_trouve\" avec le\n * motif. On ne devine pas, on n'ignore pas silencieusement. */\n\nconst AUTORISES = new Set([\n  'disponible', 'non_trouve', 'non_publie', 'source_inaccessible', 'contradictoire'\n]);\nconst CHAMPS = [\n  'form_home', 'form_away', 'injuries_home', 'injuries_away',\n  'lineups', 'h2h', 'standings', 'context'\n];\n\nconst brut = $input.first().json ?? {};\n\n// Les prompts ne doivent PAS suivre dans la chaîne : ils gonfleraient\n// inutilement le document Firestore (plafond 1 Mio) sans rien apporter.\nconst { systemPrompt, userPrompt, ...m } = $('Agrégation & prompt').first().json;\n\nlet texte = '';\ntry { texte = brut?.content?.[0]?.text ?? ''; } catch (e) { texte = ''; }\n\nlet extrait = null, erreurParse = null;\nif (texte) {\n  const propre = String(texte).replace(/^\\s*```(?:json)?/i, '').replace(/```\\s*$/, '').trim();\n  const d = propre.indexOf('{'), f = propre.lastIndexOf('}');\n  try {\n    extrait = JSON.parse(d >= 0 && f > d ? propre.slice(d, f + 1) : propre);\n  } catch (err) { erreurParse = err.message; }\n} else {\n  erreurParse = brut?.error ? 'appel LLM en échec' : 'réponse vide';\n}\n\nconst research = {};\nlet valides = 0;\nfor (const c of CHAMPS) {\n  const v = extrait?.[c];\n  if (v && typeof v === 'object' && AUTORISES.has(v.status)) {\n    // Un \"disponible\" sans source n'est pas exploitable : on le déclasse.\n    if (v.status === 'disponible' && !(Array.isArray(v.sources) && v.sources.length)) {\n      research[c] = { status: 'non_trouve', reason: 'valeur sans source — rejetée' };\n    } else {\n      research[c] = v; valides++;\n    }\n  } else {\n    research[c] = {\n      status : 'non_trouve',\n      reason : extrait ? 'champ absent ou statut hors contrat'\n                       : ('extraction illisible : ' + (erreurParse ?? 'inconnu'))\n    };\n  }\n}\n\nconsole.log('Extraction ' + m.fixture_key + ' : ' + valides + '/' + CHAMPS.length + ' champs valides');\n\nreturn [{ json: {\n  ...m,\n  research,\n  _llm: { ok: !!extrait, champs_valides: valides, parse_error: erreurParse }\n}}];\n"
+      },
+      "id": "aac2ee68-4fb9-5c3e-a054-5a3645372b93",
+      "name": "Extraction — validation",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2840,
+        160
+      ],
+      "notes": "AGENT 3 · 3/3 — tout champ hors contrat devient non_trouve."
+    },
+    {
+      "parameters": {
+        "url": "={{ $('Config').first().json.oddsApiBase }}/sports/{{ $json.competition_key }}/odds",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpQueryAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "eventIds",
+              "value": "={{ $json.event_id }}"
+            },
+            {
+              "name": "regions",
+              "value": "={{ $('Config').first().json.oddsRegions }}"
+            },
+            {
+              "name": "markets",
+              "value": "={{ $('Config').first().json.oddsMarkets }}"
+            },
+            {
+              "name": "oddsFormat",
+              "value": "decimal"
+            },
+            {
+              "name": "dateFormat",
+              "value": "iso"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 25000,
+          "response": {
+            "response": {
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "id": "f1a2812e-9477-5fe3-a45c-6c057fe9b23c",
+      "name": "Cotes (3 crédits)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3040,
+        340
+      ],
+      "credentials": {
+        "httpQueryAuth": {
+          "id": "PLACEHOLDER_ODDS",
+          "name": "The Odds API — apiKey (query)"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 4000,
+      "alwaysOutputData": true,
+      "notes": "AGENT 4. SEUL poste payant : coût = nb_marchés × nb_régions = 3 × 1 = 3 crédits. fullResponse activé pour lire x-requests-remaining."
+    },
+    {
+      "parameters": {
+        "jsCode": "\n/* AGENT 4 — normalisation des cotes + comptabilité du quota.\n *\n * Le nœud amont renvoie la réponse COMPLÈTE (fullResponse) pour lire les\n * en-têtes : x-requests-remaining est la seule source fiable du quota réel.\n * On la persiste dans les données statiques du workflow — c'est elle qui\n * alimente le coupe-circuit du cycle suivant.\n *\n * Le consensus robuste (médiane + tolérance 6 %) N'EST PAS calculé ici :\n * il est déjà implémenté et testé côté PronoStat. n8n transmet le brut. */\n\nconst st = $getWorkflowStaticData('global');\nconst r  = $input.first().json ?? {};\nconst m  = $('Dossier de recherche').first().json;\n\nconst headers = r.headers ?? {};\nconst restant = Number(headers['x-requests-remaining']);\nconst cout    = Number(headers['x-requests-last']);\nif (Number.isFinite(restant)) {\n  st.oddsCreditsRemaining = restant;\n  st.oddsCreditsUpdatedAt = new Date().toISOString();\n}\n\nconst corps = Array.isArray(r.body) ? r.body : (Array.isArray(r) ? r : []);\nconst ev = corps[0] ?? null;\nconst bks = ev?.bookmakers ?? [];\n\nconst market = ev ? {\n  status          : bks.length ? 'disponible' : 'non_trouve',\n  collected_at    : new Date().toISOString(),\n  event_id        : ev.id,\n  bookmaker_count : bks.length,\n  regions         : $('Config').first().json.oddsRegions,\n  bookmakers      : bks.map(b => ({\n    name        : b.title,\n    key         : b.key,\n    last_update : b.last_update,\n    markets     : Object.fromEntries(\n      (b.markets ?? []).map(mk => [\n        mk.key,\n        (mk.outcomes ?? []).map(o => ({\n          name  : o.name,\n          price : o.price,\n          point : (o.point === undefined ? null : o.point)\n        }))\n      ])\n    )\n  }))\n} : {\n  status       : 'non_trouve',\n  collected_at : new Date().toISOString(),\n  reason       : 'aucune cote renvoyée pour cet event_id',\n  bookmakers   : []\n};\n\nconsole.log(\n  'Cotes ' + m.fixture_key + ' : ' + (market.bookmaker_count ?? 0) + ' bookmakers | ' +\n  'coût ' + (Number.isFinite(cout) ? cout : '?') + ' crédits | ' +\n  'restant ' + (Number.isFinite(restant) ? restant : '?')\n);\n\nreturn [{ json: { ...m, market, _odds: {\n  credits_remaining : Number.isFinite(restant) ? restant : null,\n  credits_last_call : Number.isFinite(cout) ? cout : null\n}}}];\n"
+      },
+      "id": "897d25fd-517e-5baa-9af4-175c088fe71d",
+      "name": "Cotes — normalisation",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3240,
+        340
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "\n/* AGENT 5 — vérification des sources.\n *\n * Ce nœud NE TRANCHE JAMAIS une contradiction. Il qualifie, il compte, il\n * signale. Arbitrer ici reviendrait à produire une opinion — précisément ce\n * que l'architecture interdit. Le moteur baissera la confiance lui-même. */\n\nconst cfg = $('Config').first().json;\nconst m   = $input.first().json;\n\nconst SENSIBLES = ['injuries_home', 'injuries_away', 'lineups'];\nconst research  = { ...(m.research ?? {}) };\nconst contradictions = [];\nconst quality = {};\n\nfor (const [champ, v] of Object.entries(research)) {\n  const sources = Array.isArray(v.sources) ? v.sources : [];\n  const uniques = [...new Set(sources.map(s => String(s).toLowerCase().trim()).filter(Boolean))];\n\n  const q = {\n    status       : v.status,\n    source_count : uniques.length,\n    sources      : uniques,\n    sensible     : SENSIBLES.includes(champ),\n    corrobore    : uniques.length >= cfg.minSourcesForSensitiveField\n  };\n\n  if (v.status === 'contradictoire') {\n    contradictions.push({ field: champ, versions: Array.isArray(v.conflict) ? v.conflict : [] });\n    q.arbitre = false;   // transmis tel quel, volontairement\n    q.note = 'contradiction transmise sans arbitrage — le moteur abaissera la confiance';\n  }\n\n  if (v.status === 'disponible' && q.sensible && !q.corrobore) {\n    research[champ] = { ...v, corroboration: 'source_unique' };\n    q.note = 'information sensible confirmée par une seule source';\n  }\n\n  // Fraîcheur : une info de plus de 72 h sur un champ sensible est suspecte.\n  const t = Date.parse(v.collected_at ?? '');\n  if (Number.isFinite(t)) {\n    q.age_hours = Math.round((Date.now() - t) / 36000) / 100;\n    if (q.sensible && q.age_hours > 72) q.note = (q.note ? q.note + ' ; ' : '') + 'donnée ancienne';\n  }\n\n  quality[champ] = q;\n}\n\nif (contradictions.length) {\n  console.warn(m.fixture_key + ' : ' + contradictions.length + ' contradiction(s) — ' +\n               contradictions.map(c => c.field).join(', '));\n}\n\nreturn [{ json: { ...m, research, _quality: quality, _contradictions: contradictions } }];\n"
+      },
+      "id": "4eb84db0-63e0-5ffc-951a-406e763f7c17",
+      "name": "Vérification des sources",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3440,
+        340
+      ],
+      "notes": "AGENT 5 — qualifie et signale, ne tranche jamais."
+    },
+    {
+      "parameters": {
+        "jsCode": "\n/* AGENT 6 — fusion et construction du payload du livrable D.\n *\n * Règle du §9 appliquée sans exception : une valeur sans `status` est\n * REJETÉE, pas corrigée. Un champ rejeté est tracé dans `_rejected` pour\n * qu'une régression de l'extracteur soit visible dans le journal. */\n\nconst AUTORISES = new Set([\n  'disponible', 'non_trouve', 'non_publie', 'source_inaccessible', 'contradictoire'\n]);\n\nconst m = $input.first().json;\nconst research = {};\nconst rejetes  = [];\n\nfor (const [k, v] of Object.entries(m.research ?? {})) {\n  if (v && typeof v === 'object' && AUTORISES.has(v.status)) research[k] = v;\n  else rejetes.push(k);\n}\n\nconst payload = {\n  schema_version: '1.0',\n  event: {\n    sport           : m.sport,\n    competition_key : m.competition_key,\n    home            : m.home,\n    away            : m.away,\n    starts_at       : m.starts_at,\n    event_id        : m.event_id,\n    fixture_key     : m.fixture_key\n  },\n  research,\n  market        : m.market ?? { status: 'non_trouve', collected_at: new Date().toISOString(), bookmakers: [] },\n  quality       : m._quality ?? {},\n  contradictions: m._contradictions ?? [],\n  versions: {\n    research_version : '1.0',\n    orchestrator     : 'n8n',\n    window           : m.window,\n    data_timestamp   : new Date().toISOString()\n  }\n};\n\nif (rejetes.length) console.warn('Champs rejetés (contrat de statut non respecté) : ' + rejetes.join(', '));\n\nreturn [{ json: { payload, _rejected: rejetes, _priority: m.priority, _cycle: m._cycle ?? null } }];\n"
+      },
+      "id": "a01f1eec-077e-5fb9-b485-287bab987f5a",
+      "name": "Fusion — dataset normalisé",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3640,
+        340
+      ],
+      "notes": "AGENT 6 — produit le payload du livrable D."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Config').first().json.pronostatApi }}/analysis",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.payload) }}",
+        "options": {
+          "timeout": 180000
+        }
+      },
+      "id": "a7ec8ba5-bd5a-510f-ad5b-dfa60e15ffb1",
+      "name": "POST /analysis",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3840,
+        340
+      ],
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 8000,
+      "alwaysOutputData": true,
+      "notes": "Frontière de l'architecture : à partir d'ici, PronoStat modélise et décide. n8n n'interprète plus rien."
+    },
+    {
+      "parameters": {
+        "jsCode": "\n/* Préparation du journal Firestore.\n *\n * `consistency` non vide ⇒ publication BLOQUÉE (livrable E). L'analyse est\n * malgré tout journalisée : une analyse bloquée reste une donnée de\n * backtesting et une trace d'audit. La perdre serait une faute.\n *\n * Les structures profondes sont sérialisées : le nœud Firestore convertit\n * mal les objets imbriqués, et un document reste plafonné à 1 Mio. */\n\nconst rep = $input.first().json ?? {};\nconst fus = $('Fusion — dataset normalisé').first().json;\nconst p   = fus.payload;\n\nconst consistency = Array.isArray(rep.consistency) ? rep.consistency : [];\nconst erreurMoteur = !!rep.error || !rep.analysis_id;\nconst publiable = consistency.length === 0 && !erreurMoteur;\n\nreturn [{ json: {\n  analysis_id      : rep.analysis_id ?? null,\n  fixture_key      : p.event.fixture_key,\n  competition_key  : p.event.competition_key,\n  sport            : p.event.sport,\n  home             : p.event.home,\n  away             : p.event.away,\n  starts_at        : p.event.starts_at,\n  window           : p.versions.window,\n  model_version    : rep.model_version ?? null,\n  research_version : p.versions.research_version,\n  main_pick        : rep.main_pick ? JSON.stringify(rep.main_pick) : null,\n  confidence       : (rep.confidence === undefined ? null : rep.confidence),\n  publiable        : publiable,\n  blocage          : publiable ? null : (erreurMoteur ? 'moteur_injoignable_ou_erreur' : 'incoherence'),\n  consistency      : JSON.stringify(consistency),\n  contradictions   : JSON.stringify(p.contradictions),\n  request_payload  : JSON.stringify(p),\n  engine_response  : JSON.stringify(rep),\n  stored_at        : new Date().toISOString()\n}}];\n"
+      },
+      "id": "0ad0f77c-28c7-5f29-ae68-080eb2151a78",
+      "name": "Préparation du journal",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4040,
+        340
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "6e7535c0-fba0-5e61-ae9d-0e4c2be735f1",
+              "leftValue": "={{ $json.publiable }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "675e4ab2-f676-582e-82f9-f3ffcc729e19",
+      "name": "Cohérent et publiable ?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        4240,
+        340
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "9e3c91a4-d487-5a4f-b3e1-54b4142fe284",
+      "name": "Publiable",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        4440,
+        240
+      ],
+      "notes": "Point d'accroche pour une diffusion (Telegram, app, webhook)."
+    },
+    {
+      "parameters": {
+        "jsCode": "\n/* Publication bloquée. Branchez ici votre canal réel (Slack, Telegram,\n * e-mail) — je ne présume d'aucun, vous n'en avez spécifié aucun. */\nconst j = $input.first().json;\nconsole.error(\n  'PUBLICATION BLOQUÉE — ' + j.home + ' vs ' + j.away +\n  ' | motif : ' + j.blocage +\n  ' | consistency : ' + j.consistency\n);\nreturn [{ json: { ...j, alerted_at: new Date().toISOString() } }];\n"
+      },
+      "id": "52bdb537-496e-5b58-a5c7-e2682a1deb92",
+      "name": "Alerte — publication bloquée",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4440,
+        440
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "projectId": "VOTRE_PROJET_FIREBASE",
+        "database": "(default)",
+        "collection": "analyses",
+        "columns": "analysis_id,fixture_key,competition_key,sport,home,away,starts_at,window,model_version,research_version,main_pick,confidence,publiable,blocage,consistency,contradictions,request_payload,engine_response,stored_at"
+      },
+      "id": "aa667ca8-7375-5d96-9ed5-46dafc680850",
+      "name": "Journal Firestore",
+      "type": "n8n-nodes-base.googleFirebaseCloudFirestore",
+      "typeVersion": 1,
+      "position": [
+        4660,
+        340
+      ],
+      "credentials": {
+        "googleFirebaseCloudFirestoreOAuth2Api": {
+          "id": "PLACEHOLDER_FS",
+          "name": "Firestore — PronoStat"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000,
+      "alwaysOutputData": true,
+      "notes": "Sélectionner le projet dans l'interface après import. Les analyses bloquées sont journalisées aussi : trace d'audit et matière à backtesting."
+    }
+  ],
+  "connections": {
+    "Cron — toutes les 6 h": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Quota PronoStat",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Quota PronoStat": {
+      "main": [
+        [
+          {
+            "node": "Sports actifs (gratuit)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sports actifs (gratuit)": {
+      "main": [
+        [
+          {
+            "node": "Compétitions retenues",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compétitions retenues": {
+      "main": [
+        [
+          {
+            "node": "Calendriers (gratuit)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calendriers (gratuit)": {
+      "main": [
+        [
+          {
+            "node": "Normalisation des affiches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalisation des affiches": {
+      "main": [
+        [
+          {
+            "node": "Priorisation (budget quota)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Priorisation (budget quota)": {
+      "main": [
+        [
+          {
+            "node": "Des matchs retenus ?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Des matchs retenus ?": {
+      "main": [
+        [
+          {
+            "node": "Boucle sur les matchs",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Cycle reporté",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Boucle sur les matchs": {
+      "main": [
+        [
+          {
+            "node": "Bilan du cycle",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Garde-fou quota",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Garde-fou quota": {
+      "main": [
+        [
+          {
+            "node": "Budget encore disponible ?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Budget encore disponible ?": {
+      "main": [
+        [
+          {
+            "node": "Recherche web activée ?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Boucle sur les matchs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Recherche web activée ?": {
+      "main": [
+        [
+          {
+            "node": "Requêtes de recherche",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Recherche désactivée",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Recherche désactivée": {
+      "main": [
+        [
+          {
+            "node": "Dossier de recherche",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Requêtes de recherche": {
+      "main": [
+        [
+          {
+            "node": "Serper — recherche",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Serper — recherche": {
+      "main": [
+        [
+          {
+            "node": "Agrégation & prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Agrégation & prompt": {
+      "main": [
+        [
+          {
+            "node": "LLM — extraction structurée",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LLM — extraction structurée": {
+      "main": [
+        [
+          {
+            "node": "Extraction — validation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extraction — validation": {
+      "main": [
+        [
+          {
+            "node": "Dossier de recherche",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dossier de recherche": {
+      "main": [
+        [
+          {
+            "node": "Cotes (3 crédits)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cotes (3 crédits)": {
+      "main": [
+        [
+          {
+            "node": "Cotes — normalisation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cotes — normalisation": {
+      "main": [
+        [
+          {
+            "node": "Vérification des sources",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Vérification des sources": {
+      "main": [
+        [
+          {
+            "node": "Fusion — dataset normalisé",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fusion — dataset normalisé": {
+      "main": [
+        [
+          {
+            "node": "POST /analysis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "POST /analysis": {
+      "main": [
+        [
+          {
+            "node": "Préparation du journal",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Préparation du journal": {
+      "main": [
+        [
+          {
+            "node": "Cohérent et publiable ?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cohérent et publiable ?": {
+      "main": [
+        [
+          {
+            "node": "Publiable",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Alerte — publication bloquée",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Publiable": {
+      "main": [
+        [
+          {
+            "node": "Journal Firestore",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Alerte — publication bloquée": {
+      "main": [
+        [
+          {
+            "node": "Journal Firestore",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Journal Firestore": {
+      "main": [
+        [
+          {
+            "node": "Boucle sur les matchs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "saveExecutionProgress": true,
+    "executionTimeout": 3600,
+    "timezone": "Europe/Paris"
+  },
+  "tags": [],
+  "pinData": {}
+}

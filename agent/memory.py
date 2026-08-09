@@ -58,6 +58,13 @@ class LedgerEntry:
     # prédiction juste fondée sur des données fraîches : l'écart doit rester
     # mesurable après coup.
     data_timestamp: str | None = None
+    # --- métadonnées d'orchestration, posées par l'API HTTP ---
+    # `window` (J-7, J-3, J-1, PRE_MATCH) permet à l'orchestrateur de ne pas
+    # repayer des cotes pour une fenêtre déjà couverte. Un simple plancher
+    # horaire ré-analyserait un match vu à J-3 il y a 25 h, pour rien.
+    fixture_key: str = ""
+    window: str = ""
+    starts_at: str | None = None
     # --- rempli plus tard, quand le résultat est connu ---
     resolved_at: str | None = None
     actual_home: int | None = None
@@ -150,6 +157,33 @@ class PredictionLedger:
             rows.append(asdict(entry))
             self._save(rows)
         return entry
+
+    def annotate(self, entry_id: str, **champs: Any) -> bool:
+        """Complète une entrée avec des métadonnées d'orchestration.
+
+        Séparé de `record()` à dessein : ces champs viennent de
+        l'orchestrateur, pas du moteur. Les faire transiter par
+        `analyse_match()` imposerait à l'interface Streamlit de connaître une
+        notion de « fenêtre » qui ne la concerne pas.
+
+        Seuls les champs existants sont acceptés — une clé inconnue est
+        ignorée plutôt que d'écrire dans le journal une donnée qu'aucune
+        version ne saura relire.
+        """
+        connus = {f.name for f in fields(LedgerEntry)}
+        retenus = {k: v for k, v in champs.items() if k in connus and v is not None}
+        if not retenus:
+            return False
+        with self._lock:
+            rows = self._load()
+            touche = False
+            for row in rows:
+                if row.get("id") == entry_id:
+                    row.update(retenus)
+                    touche = True
+            if touche:
+                self._save(rows)
+            return touche
 
     def resolve(self, entry_id: str, home_goals: int, away_goals: int) -> bool:
         """Renseigne le résultat réel et détermine si le pronostic est passé."""

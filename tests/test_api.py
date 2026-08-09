@@ -175,3 +175,74 @@ class _Marche:
 class _Validation:
     usable = True
     discarded: list = []
+
+
+class TestContratWorkflows:
+    """Les routes attendues par les workflows n8n livres dans outputs/.
+
+    Ces tests figent le contrat : le modifier cassera l'orchestration, et
+    l'echec doit apparaitre ici plutot qu'en production.
+    """
+
+    def test_quota_exposes_the_orchestration_fields(self, client):
+        corps = client.get("/quota", headers=AUTH).json()
+        for champ in ("odds_credits_remaining", "odds_credits_limit",
+                      "period_resets_at", "recent_analyses",
+                      "cost_per_analysis"):
+            assert champ in corps, f"{champ} manque au contrat n8n"
+
+    def test_reset_date_is_null_rather_than_guessed(self, client, monkeypatch):
+        """Deviner ferait depenser le budget au mauvais rythme."""
+        monkeypatch.delenv("ODDS_QUOTA_RESET_DAY", raising=False)
+        assert client.get("/quota", headers=AUTH).json()["period_resets_at"] is None
+
+    def test_reset_date_is_computed_when_declared(self, client, monkeypatch):
+        monkeypatch.setenv("ODDS_QUOTA_RESET_DAY", "15")
+        valeur = client.get("/quota", headers=AUTH).json()["period_resets_at"]
+        assert valeur and valeur[8:10] == "15"
+
+    def test_an_absurd_reset_day_is_refused(self, client, monkeypatch):
+        monkeypatch.setenv("ODDS_QUOTA_RESET_DAY", "31")   # absent de fevrier
+        assert client.get("/quota", headers=AUTH).json()["period_resets_at"] is None
+
+    def test_pending_route_is_not_shadowed_by_the_id_route(self, client):
+        """`/analysis/pending` doit resister a `/analysis/{id}`."""
+        r = client.get("/analysis/pending", headers=AUTH)
+        assert r.status_code == 200 and isinstance(r.json(), list)
+
+    def test_score_distinguishes_absence_from_failure(self, client, monkeypatch):
+        """Compter une absence comme un echec fausserait le Brier."""
+        class HubVide:
+            def final_score(self, *a):
+                return None
+
+        monkeypatch.setattr(api, "get_hub", lambda: HubVide())
+        corps = client.get("/score", headers=AUTH, params={
+            "sport": "football", "competition_key": "premier_league",
+            "home": "Arsenal", "away": "Coventry City",
+        }).json()
+        assert corps["status"] == "not_published"
+
+    def test_an_unreachable_source_has_its_own_status(self, client, monkeypatch):
+        class HubCasse:
+            def final_score(self, *a):
+                raise RuntimeError("injoignable")
+
+        monkeypatch.setattr(api, "get_hub", lambda: HubCasse())
+        corps = client.get("/score", headers=AUTH, params={
+            "sport": "football", "competition_key": "premier_league",
+            "home": "A", "away": "B",
+        }).json()
+        assert corps["status"] == "source_unavailable"
+
+    def test_a_finished_match_returns_its_score(self, client, monkeypatch):
+        class HubOk:
+            def final_score(self, *a):
+                return (2, 1)
+
+        monkeypatch.setattr(api, "get_hub", lambda: HubOk())
+        corps = client.get("/score", headers=AUTH, params={
+            "sport": "football", "competition_key": "premier_league",
+            "home": "A", "away": "B",
+        }).json()
+        assert (corps["status"], corps["home_goals"], corps["away_goals"]) == ("finished", 2, 1)

@@ -28,7 +28,7 @@ from __future__ import annotations
 import hmac
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, status
@@ -125,6 +125,16 @@ class AnalysisRequest(BaseModel):
     competition_key: str = Field(..., examples=["premier_league"])
     home: str = Field(..., examples=["Arsenal"])
     away: str = Field(..., examples=["Coventry City"])
+    fixture_key: str | None = Field(
+        default=None,
+        description="Identifiant de rencontre cote orchestrateur.",
+    )
+    window: str | None = Field(
+        default=None,
+        description="Fenetre d'analyse : J-7, J-3, J-1, PRE_MATCH. Permet de "
+                    "ne pas repayer des cotes pour une fenetre deja couverte.",
+    )
+    starts_at: str | None = Field(default=None, description="Coup d'envoi ISO 8601.")
     research: dict[str, Any] | None = Field(
         default=None,
         description="Données pré-collectées. Archivées, pas encore exploitées "
@@ -134,6 +144,7 @@ class AnalysisRequest(BaseModel):
 
 class ResultRequest(BaseModel):
     analysis_id: str
+    finished_at: str | None = None
     home_goals: int = Field(..., ge=0)
     away_goals: int = Field(..., ge=0)
 
@@ -153,23 +164,118 @@ def health() -> dict[str, Any]:
     }
 
 
+def _period_resets_at() -> str | None:
+    """Date de remise à zéro du quota mensuel, si elle est connue.
+
+    The Odds API réinitialise selon la date d'inscription du compte, pas le
+    calendrier. Elle n'est donc pas déductible : on la renvoie seulement si
+    `ODDS_QUOTA_RESET_DAY` la déclare. Deviner ferait dépenser le budget au
+    mauvais rythme, ce qui est pire que l'absence — l'orchestrateur sait
+    replier sur un mode qui ne demande pas cette date.
+    """
+    jour = os.getenv("ODDS_QUOTA_RESET_DAY", "").strip()
+    if not jour.isdigit() or not 1 <= int(jour) <= 28:
+        return None
+    jour = int(jour)
+    maintenant = datetime.now(UTC)
+    mois, annee = maintenant.month, maintenant.year
+    if maintenant.day >= jour:
+        mois, annee = (1, annee + 1) if mois == 12 else (mois + 1, annee)
+    return datetime(annee, mois, jour, tzinfo=UTC).isoformat(timespec="seconds")
+
+
 @app.get("/quota", dependencies=[Depends(require_token)])
 def quota() -> dict[str, Any]:
-    """Crédits restants. C'est cette route qui pilote la priorisation n8n."""
+    """Crédits restants. C'est cette route qui pilote la priorisation n8n.
+
+    Le compteur des cotes vient des en-têtes du fournisseur dès qu'un appel
+    a eu lieu : c'est lui qui fait foi, pas une estimation locale.
+    """
     hub = get_hub()
+    etats = list(hub.quota_status())
+    cotes = next((s for s in etats if s.provider == "the_odds_api"), None)
+    limite = datetime.now(UTC) - timedelta(days=30)
+
+    recentes = []
+    for e in PredictionLedger().all():
+        if (e.created_at or "") < limite.isoformat(timespec="seconds"):
+            continue
+        recentes.append({
+            "analysis_id": e.id,
+            "fixture_key": e.fixture_key or e.id,
+            "window": e.window or None,
+            "analysed_at": e.created_at,
+        })
+
     return {
         "checked_at": datetime.now(UTC).isoformat(timespec="seconds"),
+        "odds_credits_remaining": cotes.remaining if cotes else None,
+        "odds_credits_limit": cotes.limit if cotes else None,
+        "odds_counter_authoritative": bool(cotes and cotes.authoritative),
+        "period_resets_at": _period_resets_at(),
+        "recent_analyses": recentes,
+        # Une analyse coûte un crédit par marché ET par région réellement
+        # interrogée. Trois marchés sur une seule région : 3 crédits.
+        "cost_per_analysis": 3,
         "providers": [
             {
                 "provider": s.provider,
                 "remaining": s.remaining,
+                "limit": s.limit,
                 "period": s.period,
                 "exhausted": s.exhausted,
             }
-            for s in hub.quota_status()
+            for s in etats
         ],
-        # Une analyse de football coûte trois marchés : h2h, totals, spreads.
-        "cost_per_analysis": 3,
+    }
+
+
+@app.get("/analysis/pending", dependencies=[Depends(require_token)])
+def pending() -> list[dict[str, Any]]:
+    """Analyses en attente de résultat. Alimente le workflow « Résultats ».
+
+    Déclarée **avant** `/analysis/{analysis_id}` : sans cela, FastAPI ferait
+    correspondre `pending` au paramètre de chemin et cette route ne serait
+    jamais atteinte.
+    """
+    return [
+        {
+            "analysis_id": e.id,
+            "fixture_key": e.fixture_key or e.id,
+            "sport": e.sport,
+            "competition": e.competition,
+            "home": e.home,
+            "away": e.away,
+            "starts_at": e.starts_at,
+            "created_at": e.created_at,
+        }
+        for e in PredictionLedger().pending()
+    ]
+
+
+@app.get("/score", dependencies=[Depends(require_token)])
+def score(sport: str, competition_key: str, home: str, away: str) -> dict[str, Any]:
+    """Score final d'une rencontre, si les sources l'ont publié.
+
+    Tout statut autre que `finished` signifie « pas encore connu ». Traiter
+    une absence comme un échec fausserait le Brier et la calibration : c'est
+    la raison d'être du statut explicite.
+    """
+    comp = cfg.competition(sport, competition_key)
+    if comp is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Compétition inconnue.")
+    try:
+        trouve = get_hub().final_score(comp, home, away)
+    except Exception as exc:
+        log.warning("score indisponible : %s", type(exc).__name__)
+        return {"status": "source_unavailable", "home_goals": None, "away_goals": None}
+    if trouve is None:
+        return {"status": "not_published", "home_goals": None, "away_goals": None}
+    return {
+        "status": "finished",
+        "home_goals": trouve[0],
+        "away_goals": trouve[1],
+        "checked_at": datetime.now(UTC).isoformat(timespec="seconds"),
     }
 
 
@@ -190,10 +296,16 @@ def analyse(req: AnalysisRequest) -> dict[str, Any]:
         ) from exc
 
     pred = result.prediction
+    identifiant = _analysis_id(req, comp)
+    # Metadonnees d'orchestration : elles viennent de n8n, pas du moteur.
+    PredictionLedger().annotate(
+        identifiant, fixture_key=req.fixture_key, window=req.window,
+        starts_at=req.starts_at,
+    )
     charge = result.as_payload()
     charge.update(
         {
-            "analysis_id": _analysis_id(req, comp),
+            "analysis_id": identifiant,
             "model_version": MODEL_VERSION,
             "research_version": RESEARCH_VERSION,
             "data_timestamp": _oldest_source(pred),
@@ -219,6 +331,8 @@ def analyse(req: AnalysisRequest) -> dict[str, Any]:
                 }
                 for p in pred.provenances
             ],
+            "fixture_key": req.fixture_key,
+            "window": req.window,
             "research_echo": req.research,
         }
     )

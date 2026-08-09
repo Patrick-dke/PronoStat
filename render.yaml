@@ -1,0 +1,73 @@
+# Description du service HTTP pour Render — « Blueprint ».
+#
+# Ce fichier évite la configuration manuelle : sur Render, « New » →
+# « Blueprint » → ce dépôt, et tout ce qui suit est déjà rempli. Seules les
+# valeurs secrètes restent à saisir, dans l'interface, jamais ici.
+#
+# Il ne déploie QUE l'API. L'interface Streamlit reste sur Streamlit Cloud :
+# les deux services partagent le même code mais ont des cycles de vie
+# différents, et rien ne gagnerait à les fusionner.
+
+services:
+  - type: web
+    name: pronostat-api
+    runtime: python
+    plan: free
+    region: frankfurt          # au plus près des sources européennes
+    branch: main
+
+    # `requirements-api.txt` inclut déjà `requirements.txt` : le moteur et
+    # l'API partagent leurs dépendances, FastAPI vient en plus.
+    buildCommand: pip install -r requirements-api.txt
+
+    # `$PORT` est imposé par Render, il ne doit pas être codé en dur.
+    # Un seul worker : le palier gratuit plafonne à 512 Mio, et le Monte
+    # Carlo à 20 000 tirages avec numpy en consomme une part notable.
+    startCommand: uvicorn api:app --host 0.0.0.0 --port $PORT --workers 1
+
+    # Render interroge cette route pour savoir si le service est vivant.
+    # `/health` est volontairement la seule route sans authentification.
+    healthCheckPath: /health
+
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12"
+
+      # Production : journaux allégés, cache dans un répertoire inscriptible.
+      - key: PRONOSTAT_ENV
+        value: production
+      - key: PRONOSTAT_LOG_LEVEL
+        value: WARNING
+      - key: PRONOSTAT_CACHE_DIR
+        value: /tmp/pronostat-cache
+
+      # Jeton d'accès à l'API. `generateValue` demande à Render de produire
+      # une valeur aléatoire : elle ne transite donc jamais par ce dépôt,
+      # qui est public. À relever dans l'onglet Environment après le premier
+      # déploiement, pour la recopier dans n8n.
+      - key: PRONOSTAT_API_TOKEN
+        generateValue: true
+
+      # Secrets à saisir dans l'interface Render. `sync: false` empêche
+      # Render de les demander au moment du Blueprint et garantit qu'aucune
+      # valeur ne peut être commitée par inadvertance.
+      - key: ODDS_API_KEY
+        sync: false
+      - key: FIREBASE_SERVICE_ACCOUNT
+        sync: false
+
+      # Facultatif : jour de remise à zéro du quota The Odds API, tel
+      # qu'affiché sur votre tableau de bord. Sans lui, l'orchestrateur
+      # replie sur un mode qui ne demande pas cette date, plutôt que de la
+      # deviner. Voir `_period_resets_at()` dans api.py.
+      - key: ODDS_QUOTA_RESET_DAY
+        sync: false
+
+      - key: THESPORTSDB_API_KEY
+        value: "3"
+      - key: ODDS_REGIONS
+        value: eu
+      - key: MARKET_WEIGHT
+        value: "0.60"
+      - key: MC_SIMS
+        value: "20000"

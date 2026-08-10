@@ -461,12 +461,49 @@ class DeepResearch:
                 continue
             self._backfill_stats(chosen, claim.value)
 
+        # Second étage : les agrégats de saison. La complétion ci-dessus
+        # rapproche les rencontres une à une ; une source qui ne publie
+        # qu'une moyenne de saison ne peut pas l'emprunter, alors qu'elle
+        # apporte souvent la seule donnée disponible — les corners, par
+        # exemple, jusqu'ici absents de toutes les sources gratuites.
+        equipe = bundle.home if slot == "form_home" else bundle.away
+        self._backfill_season(chosen, bundle.competition, equipe)
+
         setattr(bundle, slot, chosen)
         bundle.track(chosen.provenance)
         report.fields_found.append(slot)
 
         # Désaccord entre sources sur le volume de buts marqués.
         self._flag_form_disagreement(report, slot, claims)
+
+    def _backfill_season(self, target: TeamForm, comp, team: str) -> None:
+        """Dépose les moyennes de saison absentes du détail par match.
+
+        Ne remplace jamais une statistique déjà connue rencontre par
+        rencontre : celle-ci décrit la forme récente, la moyenne de saison
+        seulement la tendance générale. Écraser l'une par l'autre ferait
+        passer un chiffre de fond pour un chiffre d'actualité.
+        """
+        if comp is None:
+            return
+        for provider in self.hub.providers:
+            if not hasattr(provider, "season_profile"):
+                continue
+            try:
+                profil = provider.season_profile(comp, team)
+            except Exception:
+                continue
+            if not profil:
+                continue
+            deja_vu = {c for m in target.matches for c in m.extra}
+            ajoutes = 0
+            for cle, valeur in profil.items():
+                if cle not in deja_vu and cle not in target.extra:
+                    target.extra[cle] = valeur
+                    ajoutes += 1
+            if ajoutes:
+                target.extra["season_stats_source"] = provider.name
+            return          # une seule source d'agrégat suffit
 
     @staticmethod
     def _backfill_stats(target: TeamForm, other: TeamForm) -> None:

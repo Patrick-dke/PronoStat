@@ -162,7 +162,18 @@ class TeamForm:
         return pts / (3 * len(self.matches))
 
     def extra_avg(self, key: str) -> float | None:
-        return self._avg([m.extra.get(key) for m in self.matches if key in m.extra])
+        """Moyenne d'une statistique enrichie, par match si possible.
+
+        Certaines sources ne publient qu'un **agrégat de saison**, sans le
+        détail rencontre par rencontre. Leur valeur est alors déposée dans
+        `self.extra` et sert de repli : une moyenne de saison vaut mieux
+        qu'un « donnée indisponible », tant qu'on ne la fait pas passer pour
+        une moyenne des dix derniers matchs.
+        """
+        valeurs = [m.extra.get(key) for m in self.matches if key in m.extra]
+        if valeurs:
+            return self._avg(valeurs)
+        return _to_float(self.extra.get(key))
 
     def extra_count(self, key: str) -> int:
         return sum(1 for m in self.matches if key in m.extra)
@@ -1599,6 +1610,156 @@ class OddsHistory:
 # --------------------------------------------------------------------------
 # 2. TheSportsDB — repli universel (gratuit, sans clé obligatoire)
 # --------------------------------------------------------------------------
+class SportApi7Provider(BaseProvider):
+    """Statistiques de saison : corners, tirs, possession.
+
+    Comble le manque le plus visible du modèle — les corners, jusqu'ici
+    affichés « données insuffisantes ». Les tirs cadrés servent de substitut
+    stable aux xG, qui n'apparaissent pas dans l'agrégat de saison.
+
+    **Quota très étroit : 50 requêtes par mois.** Toute la conception en
+    découle. Récupérer les statistiques match par match coûterait une
+    vingtaine d'appels par analyse et épuiserait le mois en deux rencontres.
+    On ne prend donc que l'agrégat de saison — trois appels pour une équipe
+    jamais vue, zéro ensuite grâce au cache.
+
+    Ce fournisseur n'implémente volontairement pas `form()` : il ne connaît
+    pas le détail des rencontres et entrerait en concurrence avec des
+    sources qui, elles, le fournissent. Il complète, il ne remplace pas.
+    """
+
+    name = "sportapi7"
+    label = "Statistiques avancées de saison"
+    supports = frozenset({"football"})
+    BASE = "https://sportapi7.p.rapidapi.com/api/v1"
+
+    def __init__(self, http: HttpClient, api_key: str = ""):
+        super().__init__(http)
+        self.api_key = api_key
+        self.enabled = bool(api_key) and cfg.SOURCES.sportapi7
+
+    def handles(self, comp: Competition) -> bool:
+        return self.enabled and comp.sport == "football" and not comp.is_cup
+
+    @property
+    def _headers(self) -> dict[str, str]:
+        return {
+            "x-rapidapi-key": self.api_key,
+            "x-rapidapi-host": "sportapi7.p.rapidapi.com",
+        }
+
+    def _team_id(self, team: str, scope: str) -> int | None:
+        """Identifiant de l'équipe. Mis en cache très longtemps : il ne change
+        pas d'une saison à l'autre, et chaque appel coûte 2 % du quota."""
+        res = self.http.get_json(
+            f"{self.BASE}/search/all", params={"q": team},
+            headers=self._headers, ttl=cfg.TTL.catalog, provider=self.name,
+            scope=scope,
+        )
+        if not res:
+            return None
+        candidats = []
+        for entree in (res[0] or {}).get("results") or []:
+            if entree.get("type") != "team":
+                continue
+            e = entree.get("entity") or {}
+            if ((e.get("sport") or {}).get("name") or "").lower() != "football":
+                continue
+            if e.get("id") and e.get("name"):
+                candidats.append((str(e["name"]), int(e["id"])))
+        if not candidats:
+            return None
+        # Plusieurs clubs portent le même nom : on retient le plus proche.
+        meilleur = best_match(team, [n for n, _ in candidats], threshold=0.70)
+        for nom, ident in candidats:
+            if nom == meilleur:
+                return ident
+        return candidats[0][1]
+
+    # Saisons essayées, de la plus récente à la précédente. Deux suffisent :
+    # à l'intersaison, la saison ouverte ne compte aucun match et il faut se
+    # rabattre sur celle qui vient de s'achever.
+    SEASONS_TESTEES = 2
+
+    def _seasons(self, team_id: int, comp: Competition) -> list[tuple[int, int]]:
+        """Couples (tournoi, saison) candidats, du plus récent au plus ancien.
+
+        Résolus dynamiquement plutôt que codés en dur : les identifiants
+        changent chaque année, et une valeur périmée provoquerait un appel
+        payant sans résultat.
+        """
+        res = self.http.get_json(
+            f"{self.BASE}/team/{team_id}/standings/seasons",
+            headers=self._headers, ttl=cfg.TTL.catalog, provider=self.name,
+            scope=comp.scope,
+        )
+        if not res:
+            return []
+        for bloc in (res[0] or {}).get("tournamentSeasons") or []:
+            tournoi = (bloc.get("tournament") or {}).get("uniqueTournament") or {}
+            if name_similarity(str(tournoi.get("name") or ""), comp.label) < 0.75:
+                continue
+            saisons = bloc.get("seasons") or []
+            if not tournoi.get("id") or not saisons:
+                continue
+            return [
+                (int(tournoi["id"]), int(s["id"]))
+                for s in saisons[: self.SEASONS_TESTEES] if s.get("id")
+            ]
+        return []
+
+    def season_profile(self, comp: Competition, team: str) -> dict[str, float] | None:
+        """Moyennes par match de la saison, ou None si indisponible.
+
+        Les totaux bruts sont ramenés au match : le moteur raisonne en
+        moyennes, et comparer un total de 216 corners sur 38 journées à un
+        autre sur 25 n'aurait aucun sens.
+        """
+        if not self.handles(comp):
+            return None
+        team_id = self._team_id(team, comp.scope)
+        if team_id is None:
+            return None
+
+        brut, joues = {}, 0.0
+        for tournoi, saison in self._seasons(team_id, comp):
+            res = self.http.get_json(
+                f"{self.BASE}/team/{team_id}/unique-tournament/{tournoi}"
+                f"/season/{saison}/statistics/overall",
+                headers=self._headers, ttl=cfg.TTL.standings, provider=self.name,
+                scope=comp.scope,
+            )
+            if not res:
+                continue
+            candidat = (res[0] or {}).get("statistics") or {}
+            disputes = _to_float(candidat.get("matches")) or 0.0
+            # À l'intersaison, la saison ouverte affiche zéro match : on
+            # passe à la précédente plutôt que de renoncer.
+            if disputes >= 5:
+                brut, joues = candidat, disputes
+                break
+        if not brut:
+            return None
+
+        def par_match(cle: str) -> float | None:
+            valeur = _to_float(brut.get(cle))
+            return valeur / joues if valeur is not None else None
+
+        profil = {
+            "corners_for": par_match("corners"),
+            "shots": par_match("shots"),
+            "shots_on_target": par_match("shotsOnTarget"),
+            "shots_against": par_match("shotsAgainst"),
+            "shots_on_target_against": par_match("shotsOnTargetAgainst"),
+            "big_chances": par_match("bigChances"),
+        }
+        possession = _to_float(brut.get("averageBallPossession"))
+        if possession is not None:
+            profil["possession"] = possession
+        profil["season_sample"] = joues
+        return {k: v for k, v in profil.items() if v is not None}
+
+
 class TheSportsDbProvider(BaseProvider):
     name = "thesportsdb"
     label = "Base sportive publique"
@@ -3626,6 +3787,9 @@ class DataHub:
             WikipediaProvider(self.http),
             WikidataProvider(self.http),
             self.sportsdb,
+            # Complément statistique seul : il ne fournit pas de forme et
+            # n'entre donc en concurrence avec aucune source ci-dessus.
+            SportApi7Provider(self.http, keys.rapidapi),
             NewsRssProvider(self.http),
         ]
         self._research = None

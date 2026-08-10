@@ -519,6 +519,7 @@ class SourceToggles:
     football_data: bool = _env_bool("SOURCE_FOOTBALL_DATA", True)
     api_football: bool = _env_bool("SOURCE_API_FOOTBALL", True)
     thesportsdb: bool = _env_bool("SOURCE_THESPORTSDB", True)
+    sportapi7: bool = _env_bool("SOURCE_SPORTAPI7", True)
     balldontlie: bool = _env_bool("SOURCE_BALLDONTLIE", True)
     nhl_api: bool = _env_bool("SOURCE_NHL_API", True)
     openfootball: bool = _env_bool("SOURCE_OPENFOOTBALL", True)

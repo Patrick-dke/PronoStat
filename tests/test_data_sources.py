@@ -887,3 +887,86 @@ class TestConsensusPrice:
     def test_invalid_prices_are_ignored(self):
         assert ds.consensus_price([0.0, 1.0, -3.0, 2.0, 2.0]) == pytest.approx(2.0)
         assert ds.consensus_price([]) == 0.0
+
+
+class TestSeasonProfile:
+    """Agregat de saison : la seule source gratuite de corners.
+
+    Quota de 50 requetes par mois : chaque appel evite compte. Ces tests
+    n'en consomment aucun.
+    """
+
+    @pytest.fixture
+    def provider(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(cfg, "HTTP_CACHE_FILE", tmp_path / "c.json")
+        monkeypatch.setattr(cfg, "QUOTA_FILE", tmp_path / "q.json")
+        http = ds.HttpClient(ds.CacheStore(tmp_path / "c.json"), ds.QuotaTracker(tmp_path / "q.json"))
+        prov = ds.SportApi7Provider(http, api_key="fake")
+        monkeypatch.setattr(prov, "_team_id", lambda *a: 42)
+        return prov
+
+    @staticmethod
+    def _stats(matches, **champs):
+        return ({"statistics": {"matches": matches, **champs}}, time.time(), False)
+
+    def test_totals_are_converted_to_per_match_averages(self, provider, monkeypatch):
+        """Comparer 216 corners sur 38 journees a un autre total sur 25
+        n'aurait aucun sens : le moteur raisonne en moyennes."""
+        monkeypatch.setattr(provider, "_seasons", lambda *a: [(17, 76986)])
+        monkeypatch.setattr(provider.http, "get_json",
+                            lambda *a, **k: self._stats(38, corners=216, shots=553))
+        profil = provider.season_profile(comp("football", "premier_league"), "Arsenal")
+        assert profil["corners_for"] == pytest.approx(216 / 38, abs=0.01)
+        assert profil["shots"] == pytest.approx(553 / 38, abs=0.01)
+        assert profil["season_sample"] == 38
+
+    def test_an_unstarted_season_falls_back_to_the_previous_one(self, provider, monkeypatch):
+        """A l'intersaison la saison ouverte affiche zero match joue."""
+        monkeypatch.setattr(provider, "_seasons", lambda *a: [(17, 96668), (17, 76986)])
+        reponses = iter([self._stats(0), self._stats(38, corners=216)])
+        monkeypatch.setattr(provider.http, "get_json", lambda *a, **k: next(reponses))
+        profil = provider.season_profile(comp("football", "premier_league"), "Arsenal")
+        assert profil is not None and profil["season_sample"] == 38
+
+    def test_a_thin_sample_is_refused(self, provider, monkeypatch):
+        """Quatre matchs ne font pas une moyenne defendable."""
+        monkeypatch.setattr(provider, "_seasons", lambda *a: [(17, 96668)])
+        monkeypatch.setattr(provider.http, "get_json",
+                            lambda *a, **k: self._stats(4, corners=20))
+        assert provider.season_profile(comp("football", "premier_league"), "Arsenal") is None
+
+    def test_cups_are_out_of_scope(self, provider):
+        coupe = Competition(key="c", label="Coupe", sport="football", is_cup=True)
+        assert provider.season_profile(coupe, "Arsenal") is None
+
+    def test_without_a_key_the_provider_stays_off(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(cfg, "HTTP_CACHE_FILE", tmp_path / "c.json")
+        monkeypatch.setattr(cfg, "QUOTA_FILE", tmp_path / "q.json")
+        http = ds.HttpClient(ds.CacheStore(tmp_path / "c.json"), ds.QuotaTracker(tmp_path / "q.json"))
+        assert ds.SportApi7Provider(http, api_key="").enabled is False
+
+
+class TestFormSeasonFallback:
+    """`extra_avg` doit se replier sur l'agregat quand le detail manque."""
+
+    @staticmethod
+    def _forme(matches, extra):
+        return ds.TeamForm(team="A", sport="football", matches=matches,
+                           provenance=None, extra=extra)
+
+    def test_per_match_data_wins_over_the_season_average(self):
+        """La forme recente prime : ecraser l'une par l'autre ferait passer
+        un chiffre de fond pour un chiffre d'actualite."""
+        from datetime import datetime, timezone
+        m = ds.MatchResult(date=datetime(2026, 5, 1, tzinfo=timezone.utc),
+                           opponent="B", home=True, scored=2, conceded=1,
+                           extra={"corners_for": 8.0})
+        forme = self._forme([m], {"corners_for": 5.0})
+        assert forme.extra_avg("corners_for") == pytest.approx(8.0)
+
+    def test_the_season_average_fills_the_gap(self):
+        forme = self._forme([], {"corners_for": 5.68})
+        assert forme.extra_avg("corners_for") == pytest.approx(5.68)
+
+    def test_nothing_anywhere_stays_none(self):
+        assert self._forme([], {}).extra_avg("corners_for") is None

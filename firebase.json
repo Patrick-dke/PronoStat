@@ -1,22 +1,33 @@
 {
   "_commentaire": [
-    "Firebase Hosting sert ici une page d'accueil qui REDIRIGE vers l'application.",
-    "Ce n'est volontairement pas un proxy : Hosting ne relaie pas les connexions",
-    "WebSocket, et Streamlit ne fonctionne que par WebSocket. Un rewrite '**' vers",
-    "Cloud Run se deploie sans la moindre erreur, la page se charge... et",
-    "l'application reste figee indefiniment. Detail dans FIREBASE-CLOUDRUN.md.",
+    "Firebase Hosting sert l'interface web (dossier web/). L'API Python, elle,",
+    "est hebergee ailleurs : Hosting ne sait servir que des fichiers statiques.",
     "",
-    "L'URL de destination se renseigne dans public/app-url.js.",
-    "Cette configuration fonctionne sur le plan gratuit Spark : aucune carte."
+    "L'adresse de l'API se renseigne dans web/api-url.js. Laissee vide,",
+    "l'interface appelle sa propre origine — ce qui convient quand l'API la",
+    "sert elle-meme, mais pas ici.",
+    "",
+    "Plan gratuit Spark : aucune carte bancaire."
   ],
   "hosting": {
-    "public": "public",
+    "public": "web",
     "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
+    "rewrites": [
+      {
+        "_commentaire": "Application a page unique : toute adresse renvoie index.html,",
+        "source": "**",
+        "destination": "/index.html"
+      }
+    ],
     "headers": [
+      {
+        "_commentaire": "Les fichiers de l'application changent a chaque publication : les mettre en cache afficherait une ancienne version.",
+        "source": "**/*.@(html|js|css)",
+        "headers": [{ "key": "Cache-Control", "value": "no-cache" }]
+      },
       {
         "source": "**",
         "headers": [
-          { "key": "Cache-Control", "value": "no-store" },
           { "key": "X-Content-Type-Options", "value": "nosniff" },
           { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" }
         ]

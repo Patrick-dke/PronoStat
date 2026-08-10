@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#0B0F14">
   <title>PronoStat</title>
-  <link rel="stylesheet" href="/app.css">
+  <link rel="stylesheet" href="app.css">
 </head>
 <body>
   <main id="vue" class="app"><div class="squelette"></div></main>
@@ -20,6 +20,16 @@
       </svg>
       Accueil
     </button>
+    <button class="nav-item" data-page="matchs">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+           stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <rect x="3" y="4" width="18" height="17" rx="2"/>
+        <path d="M3 9h18M8 2v4M16 2v4"/>
+      </svg>
+      Matchs
+    </button>
+    <!-- Colonne laissée vide : le bouton « + » flotte au-dessus. -->
+    <span aria-hidden="true"></span>
     <button class="nav-item" data-page="analyses">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
            stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -27,8 +37,6 @@
       </svg>
       Analyses
     </button>
-    <!-- Colonne laissée vide : le bouton « + » flotte au-dessus. -->
-    <span aria-hidden="true"></span>
     <button class="nav-item" data-page="profil">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
            stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -38,6 +46,8 @@
     </button>
   </nav>
 
-  <script src="/app.js"></script>
+  <!-- Chargé avant l'application : il déclare vers quelle API pointer. -->
+  <script src="api-url.js"></script>
+  <script src="app.js"></script>
 </body>
 </html>

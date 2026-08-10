@@ -321,7 +321,7 @@ select:disabled { opacity: .45; }
   height: calc(var(--nav-hauteur) + env(safe-area-inset-bottom, 0px));
   padding-bottom: env(safe-area-inset-bottom, 0px);
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, 1fr);
   align-items: center;
   background: rgb(11 15 20 / .92);
   backdrop-filter: blur(14px);
@@ -425,8 +425,8 @@ select:disabled { opacity: .45; }
     height: 64px; padding-bottom: 0;
     max-width: 900px; margin: 0 auto;
     border-top: none; border-bottom: 1px solid var(--bordure);
-    grid-template-columns: repeat(4, auto);
-    justify-content: center; gap: var(--e6);
+    grid-template-columns: repeat(5, auto);
+    justify-content: center; gap: var(--e5);
   }
   .nav-item { flex-direction: row; gap: var(--e2); font-size: .82rem; }
   .nav-plus { top: 12px; bottom: auto; left: auto; right: 24px;

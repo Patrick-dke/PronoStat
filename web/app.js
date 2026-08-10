@@ -10,6 +10,11 @@
    un secret livré dans du code public serait exploitable par n'importe qui.
    ====================================================================== */
 
+/* Base de l'API. Vide = même origine, cas où l'interface est servie par
+   l'API elle-même. Renseignée dans api-url.js quand l'interface est hébergée
+   ailleurs — sur Firebase par exemple. */
+const BASE_API = (window.PRONOSTAT_API || "").replace(/\/$/, "");
+
 const CLE_JETON = "pronostat.token";
 const vue = document.getElementById("vue");
 
@@ -22,7 +27,7 @@ const etat = {
 /* ----------------------------------------------------------------- API --- */
 
 async function api(chemin, options = {}) {
-  const reponse = await fetch(chemin, {
+  const reponse = await fetch(BASE_API + chemin, {
     ...options,
     headers: {
       "Content-Type": "application/json",
@@ -574,6 +579,77 @@ function pageResultat(r) {
   `);
 }
 
+/* ------------------------------------------------------------- matchs --- */
+
+async function pageMatchs() {
+  chargement("Lecture des calendriers…");
+  let comps;
+  try {
+    comps = await competitions();
+  } catch (e) {
+    if (e.message !== "authentification") erreur(e.message);
+    return;
+  }
+
+  const nomSport = { football: "Football", basket: "Basketball",
+                     tennis: "Tennis", hockey: "Hockey sur glace" };
+  const sports = [...new Set(comps.map((c) => c.sport))];
+
+  afficher(`
+    <h1 style="margin-bottom:8px">Matchs programmés</h1>
+    <p style="color:var(--texte-doux);font-size:.9rem;margin-bottom:24px">
+      Toutes les rencontres au calendrier, compétition par compétition.</p>
+    <label class="champ"><span>Sport</span>
+      <select id="m-sport">
+        ${sports.map((s) => `<option value="${s}">${nomSport[s] || s}</option>`).join("")}
+      </select>
+    </label>
+    <div id="m-liste"></div>
+    ${bandeau}
+  `);
+
+  const selSport = document.getElementById("m-sport");
+  const liste = document.getElementById("m-liste");
+
+  async function charger() {
+    const sport = selSport.value;
+    const retenues = comps.filter((c) => c.sport === sport);
+    liste.innerHTML = `<div class="squelette" style="height:90px"></div>`;
+
+    /* Une compétition à la fois, en séquence. Les lancer toutes en parallèle
+       ferait tomber les sources gratuites sur leur limite de débit — constaté
+       en conditions réelles. */
+    const blocs = [];
+    for (const c of retenues) {
+      let fixtures = [];
+      try {
+        fixtures = await api(`/fixtures?sport=${encodeURIComponent(sport)}` +
+                             `&competition_key=${encodeURIComponent(c.key)}`);
+      } catch { fixtures = []; }
+      if (!fixtures.length) continue;
+      blocs.push(`
+        <div class="section-titre">
+          <h2>${echapper(c.label)}</h2>
+          <span class="puce or">${fixtures.length}</span>
+        </div>
+        ${fixtures.map((f) => carteMatch({ ...f, competition: c.label,
+                                           sport, competition_key: c.key })).join("")}`);
+      liste.innerHTML = blocs.join("") ||
+        `<div class="vide"><span class="emoji">📭</span><p>Recherche…</p></div>`;
+      brancherCartes();
+    }
+    if (!blocs.length) {
+      liste.innerHTML = `<div class="vide"><span class="emoji">📭</span>
+        <p>Aucune rencontre programmée dans ce sport.</p>
+        <p style="font-size:.85rem;margin-top:8px">
+          Les calendriers se remplissent à l'approche des journées.</p></div>`;
+    }
+  }
+
+  selSport.onchange = charger;
+  charger();
+}
+
 /* -------------------------------------------------------------- profil --- */
 
 async function pageProfil() {
@@ -599,7 +675,7 @@ async function pageProfil() {
   chargement("Lecture des informations…");
   let quota, sante;
   try {
-    [quota, sante] = await Promise.all([api("/quota"), fetch("/health").then((r) => r.json())]);
+    [quota, sante] = await Promise.all([api("/quota"), fetch(BASE_API + "/health").then((r) => r.json())]);
   } catch (e) {
     if (e.message !== "authentification") erreur(e.message);
     return;
@@ -648,8 +724,9 @@ async function pageProfil() {
 
 /* ---------------------------------------------------------- navigation --- */
 
-const PAGES = { accueil: pageAccueil, analyses: pageAnalyses,
-                nouvelle: pageNouvelle, profil: pageProfil };
+const PAGES = { accueil: pageAccueil, matchs: pageMatchs,
+                analyses: pageAnalyses, nouvelle: pageNouvelle,
+                profil: pageProfil };
 
 function aller(page, argument) {
   etat.page = page;

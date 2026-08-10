@@ -57,6 +57,35 @@ app = FastAPI(
     description="Couture HTTP entre n8n et le moteur d'analyse.",
 )
 
+# --------------------------------------------------------------------------
+# Origines autorisées
+# --------------------------------------------------------------------------
+# Nécessaire dès que l'interface n'est plus servie par ce service — hébergée
+# sur Firebase, par exemple. Une liste explicite, jamais `*` : cette API
+# dépense un quota payant, et autoriser toutes les origines laisserait
+# n'importe quel site tenter des appels depuis le navigateur de vos
+# visiteurs. `ALLOWED_ORIGINS` permet d'en ajouter sans toucher au code.
+_ORIGINES = [
+    o.strip()
+    for o in os.getenv(
+        "ALLOWED_ORIGINS",
+        "https://pronostat-8a2a8.web.app,https://pronostat-8a2a8.firebaseapp.com",
+    ).split(",")
+    if o.strip()
+]
+if _ORIGINES:
+    from fastapi.middleware.cors import CORSMiddleware
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_ORIGINES,
+        # Pas de cookies : l'authentification passe par un en-tête Bearer,
+        # ce qui évite entièrement la classe des attaques CSRF.
+        allow_credentials=False,
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type"],
+    )
+
 
 # --------------------------------------------------------------------------
 # Authentification

@@ -22,7 +22,35 @@ const etat = {
   page: "accueil",
   jeton: localStorage.getItem(CLE_JETON) || "",
   competitions: null,   // mis en cache : la liste ne change pas en session
+  /* Données publiées avec l'interface, servant quand aucun service n'est
+     joignable. Le moteur tourne alors ailleurs et dépose son résultat ici :
+     l'application reste consultable sans qu'aucune clé n'atteigne le
+     navigateur. */
+  horsLigne: null,
 };
+
+/** Charge data.json, publié à côté de l'interface. Null s'il est absent. */
+async function donneesPubliees() {
+  if (etat.horsLigne !== null) return etat.horsLigne || null;
+  try {
+    const r = await fetch("data.json", { cache: "no-cache" });
+    etat.horsLigne = r.ok ? await r.json() : false;
+  } catch {
+    etat.horsLigne = false;
+  }
+  return etat.horsLigne || null;
+}
+
+/** Bandeau signalant que l'affichage vient de données publiées, non du direct. */
+function bandeauHorsLigne(d) {
+  const quandGenere = d && d.generated_at ? fraicheur(d.generated_at) : "—";
+  return `<div class="carte" style="margin-bottom:20px;border-color:rgb(251 191 36 / .35)">
+      <span class="puce ambre">Données publiées</span>
+      <p style="font-size:.85rem;color:var(--texte-doux);margin-top:10px">
+        Analyses calculées ${echapper(quandGenere)}. Pour en lancer de
+        nouvelles depuis cet écran, un service d'analyse doit être connecté.
+      </p></div>`;
+}
 
 /* ----------------------------------------------------------------- API --- */
 
@@ -216,6 +244,7 @@ async function pageAccueil() {
   try {
     comps = await competitions();
   } catch (e) {
+    if (e.message === "API_ABSENTE") return accueilPublie(aujourdhui);
     gererErreur(e);
     return;
   }
@@ -262,6 +291,40 @@ async function pageAccueil() {
   brancherCartes();
 }
 
+/** Accueil bâti sur les données publiées, faute de service connecté. */
+async function accueilPublie(aujourdhui) {
+  const d = await donneesPubliees();
+  if (!d) return ecranApiAbsente();
+
+  /* Une analyse déjà calculée vaut mieux qu'une affiche nue : on rapproche
+     les deux pour montrer le pronostic quand il existe. */
+  const parMatch = new Map();
+  for (const a of d.analyses || []) {
+    parMatch.set(`${a.home}|${a.away}`, a);
+  }
+  const matchs = (d.fixtures || [])
+    .filter((f) => !f.starts_at || new Date(f.starts_at) > new Date())
+    .sort((a, b) => new Date(a.starts_at || 0) - new Date(b.starts_at || 0))
+    .slice(0, 10)
+    .map((f) => ({ ...f, ...(parMatch.get(`${f.home}|${f.away}`) || {}) }));
+
+  afficher(`
+    <header style="margin-bottom:24px">
+      <p class="surtitre">Aujourd'hui</p>
+      <h1 style="text-transform:capitalize">${echapper(aujourdhui)}</h1>
+    </header>
+    ${bandeauHorsLigne(d)}
+    <div class="section-titre">
+      <h2>À l'affiche</h2>
+      <span class="puce">${matchs.length} rencontre${matchs.length > 1 ? "s" : ""}</span>
+    </div>
+    ${matchs.length
+      ? `<div class="liste-matchs">${matchs.map(carteMatch).join("")}</div>`
+      : `<div class="vide"><span class="emoji">📭</span>
+           <p>Aucune rencontre à venir dans les données publiées.</p></div>`}
+    ${bandeau}`);
+}
+
 /* ----------------------------------------------------------- analyses --- */
 
 async function pageAnalyses() {
@@ -270,8 +333,10 @@ async function pageAnalyses() {
   try {
     historique = await api("/history");
   } catch (e) {
-    gererErreur(e);
-    return;
+    if (e.message !== "API_ABSENTE") { gererErreur(e); return; }
+    const d = await donneesPubliees();
+    if (!d) return ecranApiAbsente();
+    historique = d.analyses || [];
   }
 
   if (!historique.length) {
@@ -630,12 +695,14 @@ function pageResultat(r) {
 
 async function pageMatchs() {
   chargement("Lecture des calendriers…");
-  let comps;
+  let comps, publie = null;
   try {
     comps = await competitions();
   } catch (e) {
-    gererErreur(e);
-    return;
+    if (e.message !== "API_ABSENTE") { gererErreur(e); return; }
+    publie = await donneesPubliees();
+    if (!publie) return ecranApiAbsente();
+    comps = publie.competitions || [];
   }
 
   const nomSport = { football: "Football", basket: "Basketball",
@@ -669,10 +736,19 @@ async function pageMatchs() {
     const blocs = [];
     for (const c of retenues) {
       let fixtures = [];
-      try {
-        fixtures = await api(`/fixtures?sport=${encodeURIComponent(sport)}` +
-                             `&competition_key=${encodeURIComponent(c.key)}`);
-      } catch { fixtures = []; }
+      if (publie) {
+        /* Hors ligne : tout est déjà dans le fichier publié, on filtre au
+           lieu d'interroger. Les rencontres passées sont écartées — les
+           proposer à une simulation n'aurait aucun sens. */
+        fixtures = (publie.fixtures || []).filter(
+          (f) => f.competition_key === c.key &&
+                 (!f.starts_at || new Date(f.starts_at) > new Date()));
+      } else {
+        try {
+          fixtures = await api(`/fixtures?sport=${encodeURIComponent(sport)}` +
+                               `&competition_key=${encodeURIComponent(c.key)}`);
+        } catch { fixtures = []; }
+      }
       if (!fixtures.length) continue;
       blocs.push(`
         <div class="section-titre">
@@ -786,8 +862,26 @@ window.__retour = () => aller(etat.page === "nouvelle" ? "accueil" : etat.page);
 
 function brancherCartes() {
   document.querySelectorAll("[data-match]").forEach((el) => {
-    el.onclick = () => {
+    el.onclick = async () => {
       const m = JSON.parse(el.dataset.match);
+      /* Sans service connecté, aucune analyse ne peut être lancée. Plutôt
+         qu'un bouton mort, on affiche l'analyse déjà calculée si elle
+         existe, et on explique sinon. */
+      if (await donneesPubliees()) {
+        if (!m.recommendation) {
+          erreur("Cette rencontre n'a pas encore été analysée. " +
+                 "Les analyses sont calculées puis publiées avec l'application.");
+          return;
+        }
+        pageResultat({
+          match: { competition: m.competition, home: m.home, away: m.away },
+          decision: { recommendation: m.recommendation, probability: m.probability },
+          probabilities: m.outcome_probs || {},
+          confidence: m.confidence, markets: [], top_scores: [], sources: [],
+          consistency: [],
+        });
+        return;
+      }
       lancerAnalyse(m.sport, m.competition_key, m.home, m.away);
     };
   });

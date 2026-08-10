@@ -31,3 +31,6 @@ PronoStat/
 # Workflows n8n generes (outils de construction, pas des livrables)
 outputs/_*.py
 outputs/_*.js
+
+# Donnees publiees avec l interface (regenerees par tools/publier_donnees.py)
+web/data.json

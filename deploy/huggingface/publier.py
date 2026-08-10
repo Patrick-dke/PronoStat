@@ -125,7 +125,7 @@ def main() -> None:
 
     print(f"\nPublié. Construction en cours : {url}")
     print("Pensez à définir PRONOSTAT_API_TOKEN et ODDS_API_KEY dans")
-    print("Settings → Variables and secrets du Space.")
+    print("Settings puis Variables and secrets du Space.")
 
 
 if __name__ == "__main__":

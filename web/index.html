@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0B0F14">
+  <title>PronoStat</title>
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <main id="vue" class="app"><div class="squelette"></div></main>
+
+  <button class="nav-plus" id="btn-nouvelle" aria-label="Nouvelle analyse">+</button>
+
+  <nav class="nav" role="navigation">
+    <button class="nav-item" data-page="accueil">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+           stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/>
+      </svg>
+      Accueil
+    </button>
+    <button class="nav-item" data-page="analyses">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+           stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M4 19V9m5 10V5m5 14v-7m5 7V8"/>
+      </svg>
+      Analyses
+    </button>
+    <!-- Colonne laissée vide : le bouton « + » flotte au-dessus. -->
+    <span aria-hidden="true"></span>
+    <button class="nav-item" data-page="profil">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+           stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>
+      </svg>
+      Profil
+    </button>
+  </nav>
+
+  <script src="/app.js"></script>
+</body>
+</html>

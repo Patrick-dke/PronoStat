@@ -28,10 +28,12 @@ from __future__ import annotations
 import hmac
 import logging
 import os
+from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, status
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 import config as cfg
@@ -230,6 +232,80 @@ def quota() -> dict[str, Any]:
     }
 
 
+@app.get("/competitions", dependencies=[Depends(require_token)])
+def competitions(sport: str | None = None) -> list[dict[str, Any]]:
+    """Compétitions activées. Lecture locale : aucun appel réseau, aucun coût."""
+    sports = [sport] if sport else list(cfg.SPORTS)
+    return [
+        {
+            "sport": s,
+            "key": c.key,
+            "label": c.label,
+            "is_cup": c.is_cup,
+            "tier": c.tier,
+        }
+        for s in sports
+        for c in cfg.competitions(s)
+    ]
+
+
+@app.get("/fixtures", dependencies=[Depends(require_token)])
+def fixtures(sport: str, competition_key: str) -> list[dict[str, Any]]:
+    """Rencontres programmées. Les endpoints calendrier sont gratuits."""
+    comp = cfg.competition(sport, competition_key)
+    if comp is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Compétition inconnue.")
+    try:
+        trouvees = get_hub().fixtures(comp)
+    except Exception:
+        return []      # un calendrier absent n'est pas une erreur de service
+    return [
+        {
+            "home": f.home,
+            "away": f.away,
+            "starts_at": f.starts_at.isoformat(timespec="seconds") if f.starts_at else None,
+            "label": f.label,
+        }
+        for f in trouvees
+    ]
+
+
+@app.get("/teams", dependencies=[Depends(require_token)])
+def teams(sport: str, competition_key: str) -> dict[str, Any]:
+    """Effectif d'une compétition, pour les menus de sélection."""
+    comp = cfg.competition(sport, competition_key)
+    if comp is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Compétition inconnue.")
+    try:
+        resultat = get_hub().roster(comp)
+    except Exception:
+        return {"teams": [], "coverage": None}
+    return {"teams": resultat.names, "coverage": resultat.coverage}
+
+
+@app.get("/history", dependencies=[Depends(require_token)])
+def history() -> list[dict[str, Any]]:
+    """Analyses passées, résolues ou non. Alimente la page « Mes analyses »."""
+    return [
+        {
+            "analysis_id": e.id,
+            "created_at": e.created_at,
+            "sport": e.sport,
+            "competition": e.competition,
+            "home": e.home,
+            "away": e.away,
+            "recommendation": e.recommendation,
+            "probability": e.probability,
+            "confidence": e.confidence,
+            "resolved": e.resolved,
+            "hit": e.hit,
+            "actual_home": e.actual_home,
+            "actual_away": e.actual_away,
+        }
+        for e in reversed(PredictionLedger().all())
+    ]
+
+
 @app.get("/analysis/pending", dependencies=[Depends(require_token)])
 def pending() -> list[dict[str, Any]]:
     """Analyses en attente de résultat. Alimente le workflow « Résultats ».
@@ -400,6 +476,19 @@ def _oldest_source(prediction) -> str | None:
     from agent.memory import _oldest_data
 
     return _oldest_data(prediction)
+
+
+# --------------------------------------------------------------------------
+# Interface web
+# --------------------------------------------------------------------------
+# Servie par ce même service, à dessein. Une origine unique évite toute
+# configuration CORS et n'impose qu'un seul hébergement. Le montage vient
+# après les routes : monter « / » en premier les masquerait toutes.
+_WEB = Path(__file__).resolve().parent / "web"
+if _WEB.is_dir():
+    app.mount("/", StaticFiles(directory=str(_WEB), html=True), name="web")
+else:  # pragma: no cover - déploiement sans interface
+    log.warning("dossier web/ absent : l'API fonctionne, sans interface")
 
 
 def _analysis_id(req: AnalysisRequest, comp) -> str:

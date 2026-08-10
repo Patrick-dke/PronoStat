@@ -47,7 +47,55 @@ async function api(chemin, options = {}) {
     const corps = await reponse.json().catch(() => ({}));
     throw new Error(corps.detail || `Erreur ${reponse.status}`);
   }
+
+  /* Une réponse HTML là où l'on attend du JSON signifie qu'aucune API n'écoute
+     à cette adresse : l'hébergeur a renvoyé la page d'accueil. Sans ce
+     contrôle, `json()` échoue sur une erreur d'analyse qui n'apprend rien —
+     alors que la cause est simplement une adresse d'API non configurée. */
+  const type = reponse.headers.get("content-type") || "";
+  if (!type.includes("application/json")) {
+    throw new Error("API_ABSENTE");
+  }
   return reponse.json();
+}
+
+/** Aiguille une erreur vers l'affichage qui convient.
+ *
+ *  « authentification » est déjà traitée par `api()`, qui a redirigé vers le
+ *  profil : la ré-afficher écraserait cet écran par un message d'erreur.
+ */
+function gererErreur(e) {
+  if (e.message === "authentification") return;
+  if (e.message === "API_ABSENTE") { ecranApiAbsente(); return; }
+  erreur(e.message);
+}
+
+/** Écran expliquant que l'interface ne trouve aucune API, et comment y remédier. */
+function ecranApiAbsente() {
+  afficher(`
+    <div class="vide" style="text-align:left">
+      <span class="emoji" style="text-align:center;display:block">🔌</span>
+      <h1 style="text-align:center;margin-bottom:16px">Aucun service connecté</h1>
+      <p style="margin-bottom:20px">
+        Cette interface est bien en ligne, mais elle ne trouve aucun service
+        d'analyse à interroger à l'adresse&nbsp;:
+        <br><code style="color:var(--or)">${echapper(BASE_API || location.origin)}</code>
+      </p>
+      <div class="carte" style="text-align:left">
+        <p style="font-size:.88rem;margin-bottom:12px">
+          <strong>Pour la relier</strong></p>
+        <p style="font-size:.85rem;color:var(--texte-doux)">
+          1. Publier le service d'analyse<br>
+          2. Renseigner son adresse dans <code>web/api-url.js</code><br>
+          3. Republier cette interface
+        </p>
+      </div>
+      <p style="font-size:.8rem;color:var(--texte-faible);margin-top:20px">
+        L'adresse doit commencer par <code>https://</code> — une page sécurisée
+        ne peut pas appeler un service qui ne l'est pas.
+      </p>
+    </div>
+    ${bandeau}`);
 }
 
 /* ------------------------------------------------------------- outils --- */
@@ -168,7 +216,7 @@ async function pageAccueil() {
   try {
     comps = await competitions();
   } catch (e) {
-    if (e.message !== "authentification") erreur(e.message);
+    gererErreur(e);
     return;
   }
 
@@ -222,7 +270,7 @@ async function pageAnalyses() {
   try {
     historique = await api("/history");
   } catch (e) {
-    if (e.message !== "authentification") erreur(e.message);
+    gererErreur(e);
     return;
   }
 
@@ -307,7 +355,7 @@ async function pageNouvelle(prerempli = null) {
   try {
     comps = await competitions();
   } catch (e) {
-    if (e.message !== "authentification") erreur(e.message);
+    gererErreur(e);
     return;
   }
 
@@ -374,8 +422,7 @@ async function pageNouvelle(prerempli = null) {
       selDom.disabled = false;
       majAdversaires();
     } catch (e) {
-      if (e.message !== "authentification") zone.innerHTML =
-        `<div class="carte"><p style="color:var(--rouge);font-size:.88rem">${echapper(e.message)}</p></div>`;
+      gererErreur(e);
     }
   }
 
@@ -478,7 +525,7 @@ async function lancerAnalyse(sport, competition_key, home, away) {
     pageResultat(resultat);
   } catch (e) {
     clearInterval(minuteur);
-    if (e.message !== "authentification") erreur(e.message);
+    gererErreur(e);
   }
 }
 
@@ -587,7 +634,7 @@ async function pageMatchs() {
   try {
     comps = await competitions();
   } catch (e) {
-    if (e.message !== "authentification") erreur(e.message);
+    gererErreur(e);
     return;
   }
 
@@ -677,7 +724,7 @@ async function pageProfil() {
   try {
     [quota, sante] = await Promise.all([api("/quota"), fetch(BASE_API + "/health").then((r) => r.json())]);
   } catch (e) {
-    if (e.message !== "authentification") erreur(e.message);
+    gererErreur(e);
     return;
   }
 

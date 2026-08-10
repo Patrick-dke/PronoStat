@@ -18,6 +18,7 @@ courant du dossier.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
@@ -34,7 +35,26 @@ FICHIERS = [
     "api.py", "engine.py", "config.py", "data_sources.py", "research.py",
     "requirements.txt", "requirements-api.txt",
 ]
-DOSSIERS = ["agent"]
+# `web` est inclus : le Space sert alors aussi l'interface, ce qui donne
+# une seconde adresse utilisable si Firebase venait a manquer.
+DOSSIERS = ["agent", "web"]
+
+
+def _jeton_hf() -> str:
+    """Jeton d'écriture Hugging Face, s'il est disponible.
+
+    Cherché dans l'environnement, puis dans `.env` — que git ignore, donc
+    sans risque de publication accidentelle. Sa valeur n'est jamais affichée.
+    """
+    jeton = os.getenv("HF_TOKEN", "").strip()
+    if jeton:
+        return jeton
+    try:
+        from dotenv import dotenv_values
+
+        return (dotenv_values(RACINE / ".env").get("HF_TOKEN") or "").strip()
+    except Exception:
+        return ""
 
 
 def executer(cmd: list[str], cwd: Path) -> None:
@@ -80,12 +100,25 @@ def main() -> None:
         executer(["git", "init", "-q", "-b", "main"], travail)
         executer(["git", "add", "-A"], travail)
         executer(["git", "commit", "-q", "-m", "Publier l'API PronoStat"], travail)
-        executer(["git", "remote", "add", "origin", url], travail)
+        # Deux façons de s'authentifier, dans cet ordre :
+        #
+        # 1. `HF_TOKEN`, lu dans l'environnement ou dans `.env` — pratique
+        #    quand `hf auth login` n'aboutit pas. Le jeton n'est écrit que
+        #    dans le dépôt temporaire, effacé à la sortie de ce bloc.
+        # 2. À défaut, git demande identifiant et mot de passe.
+        jeton = _jeton_hf()
+        pousser_vers = (
+            url.replace("https://", f"https://user:{jeton}@") if jeton else url
+        )
+        executer(["git", "remote", "add", "origin", pousser_vers], travail)
 
         print(f"\nPublication vers {url}")
-        print("Identifiants demandés : votre nom d'utilisateur Hugging Face,")
-        print("et un jeton d'accès en écriture comme mot de passe")
-        print("(huggingface.co/settings/tokens, portée « write »).\n")
+        if jeton:
+            print("Authentification par HF_TOKEN.\n")
+        else:
+            print("Identifiants demandés : votre nom d'utilisateur Hugging Face,")
+            print("et un jeton d'accès en écriture comme mot de passe")
+            print("(huggingface.co/settings/tokens, portée « write »).\n")
         # `--force` est ici le comportement voulu : le Space est un miroir de
         # ce dossier, pas un dépôt où l'on collabore.
         executer(["git", "push", "--force", "origin", "main"], travail)

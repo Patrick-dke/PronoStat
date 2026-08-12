@@ -1,0 +1,87 @@
+# Rafraîchit les pronostics et republie l'application, ordinateur éteint.
+#
+# Pourquoi GitHub Actions plutôt qu'un hébergeur : Hugging Face réserve
+# désormais les conteneurs aux comptes payants, et Render s'est révélé
+# inaccessible. Actions est gratuit et sans limite sur un dépôt public, et
+# utilise deux services qui fonctionnent déjà — GitHub et Firebase.
+#
+# Ce n'est pas un serveur : rien n'écoute en permanence. Le moteur s'exécute,
+# publie son résultat, et s'arrête. L'application reste consultable à tout
+# moment puisque Firebase sert des fichiers.
+
+name: Publier les pronostics
+
+on:
+  schedule:
+    # 06h00 UTC, une fois par jour. Le quota de cotes commande ce rythme :
+    # 500 requêtes par mois, trois par analyse, soit environ cinq analyses
+    # quotidiennes au maximum. Deux exécutions par jour l'épuiseraient.
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+    inputs:
+      analyses:
+        description: "Nombre d'analyses à lancer (0 = calendriers seuls)"
+        default: "3"
+
+permissions:
+  contents: read
+
+concurrency:
+  # Deux exécutions simultanées dépenseraient deux fois le quota et
+  # publieraient chacune leur version.
+  group: publication
+  cancel-in-progress: false
+
+jobs:
+  publier:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Installer les dépendances
+        run: pip install -r requirements.txt
+
+      # Le cache évite de re-télécharger calendriers et effectifs à chaque
+      # exécution. Les réponses portent leur propre durée de vie : rien de
+      # périmé n'est réutilisé, seul le trafic inutile est supprimé.
+      - name: Restaurer le cache des sources
+        uses: actions/cache@v4
+        with:
+          path: .cache
+          key: sources-${{ github.run_id }}
+          restore-keys: sources-
+
+      - name: Analyser et préparer les données
+        env:
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+          RAPIDAPI_KEY: ${{ secrets.RAPIDAPI_KEY }}
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          THESPORTSDB_API_KEY: "3"
+          ODDS_REGIONS: eu
+          PRONOSTAT_ENV: production
+          PRONOSTAT_LOG_LEVEL: WARNING
+        run: |
+          python tools/publier_donnees.py --analyser \
+            --max "${{ github.event.inputs.analyses || 3 }}"
+
+      - name: Publier sur Firebase
+        uses: FirebaseExtended/action-hosting-deploy@v0
+        with:
+          repoToken: ${{ secrets.GITHUB_TOKEN }}
+          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          projectId: pronostat-8a2a8
+          channelId: live
+
+      - name: Résumé
+        if: always()
+        run: |
+          echo "### Publication terminée" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "https://pronostat-8a2a8.web.app" >> $GITHUB_STEP_SUMMARY

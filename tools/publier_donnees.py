@@ -10,8 +10,12 @@ n'importe quel visiteur d'épuiser le quota, le moteur tourne ici et publie
 son résultat. L'interface en ligne lit un fichier statique : elle affiche de
 vraies analyses, sans jamais approcher une clé.
 
-    python tools/publier_donnees.py            # calendriers + historique
-    python tools/publier_donnees.py --analyser # + analyse les affiches à venir
+    python tools/publier_donnees.py              # calendriers + historique
+    python tools/publier_donnees.py --analyser   # + analyse les affiches
+    python tools/publier_donnees.py --analyser --max 3
+
+Les calendriers sont gratuits ; chaque analyse coûte trois crédits de cotes.
+`--max` borne la dépense, ce qui rend l'exécution automatique tenable.
 
 Puis `firebase deploy --only hosting`.
 """
@@ -66,6 +70,15 @@ def collecter(hub: DataHub) -> dict:
     return {"competitions": competitions, "fixtures": affiches}
 
 
+def _plafond() -> int:
+    """Nombre maximal d'analyses, depuis `--max`. Sans limite par défaut."""
+    if "--max" in sys.argv:
+        i = sys.argv.index("--max")
+        if i + 1 < len(sys.argv) and sys.argv[i + 1].isdigit():
+            return int(sys.argv[i + 1])
+    return 10**6
+
+
 def analyser(hub: DataHub, affiches: list[dict]) -> None:
     """Analyse les prochaines affiches. Les résultats rejoignent le journal.
 
@@ -73,8 +86,12 @@ def analyser(hub: DataHub, affiches: list[dict]) -> None:
     rencontres les plus proches, celles qui intéressent réellement.
     """
     agent = AnalysisAgent(hub)
+    plafond, faites = _plafond(), 0
     par_competition: dict[str, int] = {}
     for a in sorted(affiches, key=lambda x: x["starts_at"] or "9999"):
+        if faites >= plafond:
+            print(f"  plafond de {plafond} analyses atteint")
+            break
         cle = a["competition_key"]
         if par_competition.get(cle, 0) >= ANALYSES_PAR_COMPETITION:
             continue
@@ -84,6 +101,7 @@ def analyser(hub: DataHub, affiches: list[dict]) -> None:
         par_competition[cle] = par_competition.get(cle, 0) + 1
         try:
             r = agent.analyse_match(comp, a["home"], a["away"])
+            faites += 1
             print(f"  {a['home'][:20]:20} - {a['away'][:20]:20} "
                   f"{r.decision.recommendation[:28]:28} conf {r.decision.confidence:.1f}")
         except Exception as exc:

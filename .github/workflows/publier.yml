@@ -14,14 +14,25 @@ name: Publier les pronostics
 on:
   schedule:
     # 06h00 UTC, une fois par jour. Le quota de cotes commande ce rythme :
-    # 500 requêtes par mois, trois par analyse, soit environ cinq analyses
-    # quotidiennes au maximum. Deux exécutions par jour l'épuiseraient.
+    # 500 requêtes par mois, trois par analyse. Deux exécutions quotidiennes
+    # l'épuiseraient — le nombre d'analyses par passage est réglé plus bas.
     - cron: "0 6 * * *"
   workflow_dispatch:
     inputs:
       analyses:
         description: "Nombre d'analyses à lancer (0 = calendriers seuls)"
         default: "3"
+
+# Analyses quotidiennes. Une seule, à dessein : trois crédits par jour
+# laissent près de deux mois d'autonomie, contre dix-huit jours à trois
+# analyses — de quoi tenir jusqu'à la remise à zéro du quota tout en gardant
+# une marge pour les analyses lancées à la main.
+#
+# Ce n'est pas une perte de contenu : les analyses s'accumulent dans le
+# journal, elles ne se remplacent pas. Le déclenchement manuel permet par
+# ailleurs d'en demander davantage pour une exécution donnée.
+env:
+  ANALYSES_PAR_JOUR: "1"
 
 permissions:
   contents: read
@@ -69,7 +80,7 @@ jobs:
           PRONOSTAT_LOG_LEVEL: WARNING
         run: |
           python tools/publier_donnees.py --analyser \
-            --max "${{ github.event.inputs.analyses || 3 }}"
+            --max "${{ github.event.inputs.analyses || env.ANALYSES_PAR_JOUR }}"
 
       - name: Publier sur Firebase
         uses: FirebaseExtended/action-hosting-deploy@v0

@@ -71,11 +71,19 @@ def collecter(hub: DataHub) -> dict:
 
 
 def _plafond() -> int:
-    """Nombre maximal d'analyses, depuis `--max`. Sans limite par défaut."""
+    """Nombre maximal d'analyses, depuis `--max`.
+
+    Un `--max` présent mais illisible vaut zéro, pas « sans limite » : la
+    valeur vient d'une variable d'environnement calculée par le workflow, et
+    se tromper dans ce sens dépenserait tout le quota de cotes d'un coup.
+    """
     if "--max" in sys.argv:
         i = sys.argv.index("--max")
-        if i + 1 < len(sys.argv) and sys.argv[i + 1].isdigit():
-            return int(sys.argv[i + 1])
+        brut = sys.argv[i + 1].strip() if i + 1 < len(sys.argv) else ""
+        if not brut.isdigit():
+            print(f"  --max illisible ({brut!r}) : aucune analyse lancée")
+            return 0
+        return int(brut)
     return 10**6
 
 

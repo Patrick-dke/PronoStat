@@ -29,16 +29,51 @@ const etat = {
   horsLigne: null,
 };
 
-/** Charge data.json, publié à côté de l'interface. Null s'il est absent. */
-async function donneesPubliees() {
-  if (etat.horsLigne !== null) return etat.horsLigne || null;
-  try {
-    const r = await fetch("data.json", { cache: "no-cache" });
-    etat.horsLigne = r.ok ? await r.json() : false;
-  } catch {
-    etat.horsLigne = false;
-  }
-  return etat.horsLigne || null;
+/** Charge data.json, publié à côté de l'interface. Null s'il est absent.
+ *
+ *  La promesse est mémorisée, pas seulement son résultat : plusieurs écrans
+ *  interrogent ce fichier au même instant au démarrage, et sans cela chacun
+ *  le retéléchargerait.
+ */
+let _publie = null;
+function donneesPubliees() {
+  if (etat.horsLigne !== null) return Promise.resolve(etat.horsLigne || null);
+  if (_publie) return _publie;
+  _publie = (async () => {
+    try {
+      const r = await fetch("data.json", { cache: "no-cache" });
+      etat.horsLigne = r.ok ? await r.json() : false;
+    } catch {
+      etat.horsLigne = false;
+    }
+    return etat.horsLigne || null;
+  })();
+  return _publie;
+}
+
+/** Un service d'analyse répond-il ? Sonde unique, tranchée une fois pour toutes.
+ *
+ *  Pourquoi une sonde plutôt qu'une déduction : publiée sur Firebase,
+ *  l'application est un site de fichiers — le moteur tourne ailleurs et y
+ *  dépose `data.json`. Aucune API n'écoute. Chaque écran le découvrait à sa
+ *  façon, d'après l'erreur reçue, et cette erreur change avec l'hébergeur :
+ *  404 sur un serveur statique nu, page HTML sur Firebase qui réécrit tout
+ *  vers l'interface. Un écran interprétait, l'autre non, et l'utilisateur
+ *  tombait sur « Aucun service connecté » alors que les données étaient là.
+ */
+let _service = null;
+function serviceDisponible() {
+  if (_service) return _service;
+  _service = (async () => {
+    try {
+      const r = await fetch(BASE_API + "/health", { cache: "no-store" });
+      const type = r.headers.get("content-type") || "";
+      return r.ok && type.includes("application/json");
+    } catch {
+      return false;
+    }
+  })();
+  return _service;
 }
 
 /** Bandeau signalant que l'affichage vient de données publiées, non du direct. */
@@ -55,6 +90,8 @@ function bandeauHorsLigne(d) {
 /* ----------------------------------------------------------------- API --- */
 
 async function api(chemin, options = {}) {
+  if (!(await serviceDisponible())) throw new Error("API_ABSENTE");
+
   const reponse = await fetch(BASE_API + chemin, {
     ...options,
     headers: {
@@ -63,6 +100,13 @@ async function api(chemin, options = {}) {
       ...(options.headers || {}),
     },
   });
+
+  /* Contrôlé avant le code HTTP : un hébergeur qui ne connaît pas la route
+     répond 404, ou sert l'interface elle-même. Dans les deux cas la cause
+     est la même — pas d'API ici — et « Erreur 404 » ne l'apprendrait pas. */
+  const type = reponse.headers.get("content-type") || "";
+  if (!type.includes("application/json")) throw new Error("API_ABSENTE");
+
   if (reponse.status === 401 || reponse.status === 503) {
     // Jeton absent ou refusé : inutile d'afficher une erreur technique,
     // on renvoie l'utilisateur là où il peut agir.
@@ -74,15 +118,6 @@ async function api(chemin, options = {}) {
   if (!reponse.ok) {
     const corps = await reponse.json().catch(() => ({}));
     throw new Error(corps.detail || `Erreur ${reponse.status}`);
-  }
-
-  /* Une réponse HTML là où l'on attend du JSON signifie qu'aucune API n'écoute
-     à cette adresse : l'hébergeur a renvoyé la page d'accueil. Sans ce
-     contrôle, `json()` échoue sur une erreur d'analyse qui n'apprend rien —
-     alors que la cause est simplement une adresse d'API non configurée. */
-  const type = reponse.headers.get("content-type") || "";
-  if (!type.includes("application/json")) {
-    throw new Error("API_ABSENTE");
   }
   return reponse.json();
 }
@@ -414,12 +449,45 @@ async function competitions() {
   return etat.competitions;
 }
 
+/** Écran du bouton « + » quand aucun service ne peut lancer d'analyse.
+ *
+ *  Lancer une analyse demande un moteur qui tourne et des crédits de cotes.
+ *  Publiée sur Firebase, l'application n'en a pas : les analyses sont
+ *  calculées en amont puis déposées. Le dire vaut mieux qu'un formulaire qui
+ *  échouerait à la validation.
+ */
+function nouvellePubliee(d) {
+  const analyses = (d.analyses || []).length;
+  afficher(`
+    <h1 style="margin-bottom:8px">Nouvelle analyse</h1>
+    <p style="color:var(--texte-doux);font-size:.9rem;margin-bottom:24px">
+      Les analyses sont calculées automatiquement, puis publiées avec
+      l'application.</p>
+    ${bandeauHorsLigne(d)}
+    <div class="carte" style="margin-bottom:20px">
+      <p style="font-size:.88rem;margin-bottom:12px"><strong>Pourquoi ici</strong></p>
+      <p style="font-size:.85rem;color:var(--texte-doux)">
+        Chaque analyse consulte les cotes du marché, et ce quota est limité.
+        Il est dépensé en amont sur les affiches les plus proches — ${analyses}
+        analyse${analyses > 1 ? "s sont" : " est"} déjà disponible${analyses > 1 ? "s" : ""} —
+        plutôt qu'exposé à la demande.
+      </p>
+    </div>
+    <button class="bouton" id="btn-voir-matchs">Voir les matchs programmés</button>
+    ${bandeau}`);
+  document.getElementById("btn-voir-matchs").onclick = () => aller("matchs");
+}
+
 async function pageNouvelle(prerempli = null) {
   chargement("Préparation…");
   let comps;
   try {
     comps = await competitions();
   } catch (e) {
+    if (e.message === "API_ABSENTE") {
+      const d = await donneesPubliees();
+      if (d) return nouvellePubliee(d);
+    }
     gererErreur(e);
     return;
   }
@@ -776,6 +844,13 @@ async function pageMatchs() {
 /* -------------------------------------------------------------- profil --- */
 
 async function pageProfil() {
+  /* Sans service connecté mais avec des données publiées, le profil décrit
+     ce que l'application sait faire dans cet état, au lieu de réclamer une
+     clé dont personne n'a besoin ici. */
+  if (!etat.jeton) {
+    const publie = await donneesPubliees();
+    if (publie) return profilPublie(publie);
+  }
   if (!etat.jeton) {
     afficher(`
       <h1 style="margin-bottom:8px">Connexion</h1>
@@ -790,6 +865,7 @@ async function pageProfil() {
       if (!valeur) return;
       etat.jeton = valeur;
       localStorage.setItem(CLE_JETON, valeur);
+      _service = null;   // un service vient peut-être d'apparaître : re-sonder
       aller("accueil");
     };
     return;
@@ -800,6 +876,17 @@ async function pageProfil() {
   try {
     [quota, sante] = await Promise.all([api("/quota"), fetch(BASE_API + "/health").then((r) => r.json())]);
   } catch (e) {
+    /* Un jeton avait été saisi, mais aucun service ne répond. La clé ne sert
+       à rien : on l'oublie et on revient à l'application publiée, plutôt que
+       de laisser l'utilisateur devant une erreur qu'il ne peut pas corriger. */
+    if (e.message === "API_ABSENTE") {
+      const d = await donneesPubliees();
+      if (d) {
+        etat.jeton = "";
+        localStorage.removeItem(CLE_JETON);
+        return profilPublie(d);
+      }
+    }
     gererErreur(e);
     return;
   }
@@ -842,6 +929,50 @@ async function pageProfil() {
     localStorage.removeItem(CLE_JETON);
     etat.jeton = "";
     aller("profil");
+  };
+}
+
+/** Profil quand l'application tourne sur ses données publiées. */
+function profilPublie(d) {
+  const analyses = (d.analyses || []).length;
+  const resolus = (d.analyses || []).filter((a) => a.resolved).length;
+  afficher(`
+    <h1 style="margin-bottom:24px">Profil</h1>
+
+    <div class="grille-3" style="margin-bottom:20px">
+      <div class="mini-carte"><div class="cle">Affiches</div>
+        <div class="valeur">${(d.fixtures || []).length}</div></div>
+      <div class="mini-carte"><div class="cle">Analyses</div>
+        <div class="valeur">${analyses}</div></div>
+      <div class="mini-carte"><div class="cle">Résultats</div>
+        <div class="valeur">${resolus}</div></div>
+    </div>
+
+    <div class="section-titre"><h2>Mise à jour</h2></div>
+    <div class="carte" style="margin-bottom:20px">
+      <div class="ligne-stat"><span>Dernière actualisation</span>
+        <span class="val">${echapper(fraicheur(d.generated_at))}</span></div>
+      <div class="ligne-stat"><span>Rythme</span>
+        <span class="val">chaque jour</span></div>
+      <div class="ligne-stat"><span>Version du modèle</span>
+        <span class="val">${echapper(d.model_version || "—")}</span></div>
+    </div>
+
+    <div class="carte">
+      <p style="font-size:.88rem;margin-bottom:10px"><strong>Lancer vos propres analyses</strong></p>
+      <p style="font-size:.85rem;color:var(--texte-doux)">
+        Les analyses affichées sont calculées puis publiées automatiquement.
+        Pour en lancer une à la demande depuis cet écran, connectez un service
+        d'analyse — la clé d'accès se saisit alors ici.</p>
+      <button class="bouton secondaire" style="margin-top:16px"
+              id="btn-connecter">Connecter un service</button>
+    </div>
+    ${bandeau}`);
+
+  document.getElementById("btn-connecter").onclick = () => {
+    etat.horsLigne = false;      // force l'affichage du formulaire
+    pageProfil();
+    etat.horsLigne = null;       // et rétablit la détection ensuite
   };
 }
 
@@ -892,4 +1023,15 @@ document.querySelectorAll(".nav-item").forEach((b) => {
 });
 document.getElementById("btn-nouvelle").onclick = () => aller("nouvelle");
 
-aller(etat.jeton ? "accueil" : "profil");
+/* Un jeton n'a de sens que si un service d'analyse répond. Quand
+   l'application est publiée avec ses données, elle se consulte sans
+   authentification : exiger une clé pour lire des fichiers déjà publics
+   enverrait l'utilisateur vers un écran de connexion inutile, puis vers une
+   erreur — c'est exactement ce qui se produisait. */
+(async () => {
+  if (!etat.jeton && (await donneesPubliees())) {
+    aller("accueil");
+    return;
+  }
+  aller(etat.jeton ? "accueil" : "profil");
+})();

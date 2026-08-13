@@ -17,6 +17,16 @@ on:
     # 500 requêtes par mois, trois par analyse. Deux exécutions quotidiennes
     # l'épuiseraient — le nombre d'analyses par passage est réglé plus bas.
     - cron: "0 6 * * *"
+
+  # Une correction de l'interface doit se voir en ligne sans attendre le
+  # lendemain matin. Ces publications-là ne lancent aucune analyse (voir
+  # `ANALYSES` plus bas) : elles ne coûtent donc pas un seul crédit de cotes.
+  push:
+    branches: [main]
+    paths:
+      - "web/**"
+      - "firebase.json"
+
   workflow_dispatch:
     inputs:
       analyses:
@@ -79,9 +89,11 @@ jobs:
           ODDS_REGIONS: eu
           PRONOSTAT_ENV: production
           PRONOSTAT_LOG_LEVEL: WARNING
-        run: |
-          python tools/publier_donnees.py --analyser \
-            --max "${{ github.event.inputs.analyses || env.ANALYSES_PAR_JOUR }}"
+          # Zéro sur un push : republier l'interface ne doit rien coûter. Les
+          # calendriers sont rafraîchis quand même — ils sont gratuits — et le
+          # journal des analyses déjà calculées est relu tel quel.
+          ANALYSES: "${{ github.event_name == 'push' && '0' || github.event.inputs.analyses || env.ANALYSES_PAR_JOUR }}"
+        run: python tools/publier_donnees.py --analyser --max "$ANALYSES"
 
       - name: Publier sur Firebase
         uses: FirebaseExtended/action-hosting-deploy@v0

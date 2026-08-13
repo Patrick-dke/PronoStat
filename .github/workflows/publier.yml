@@ -23,16 +23,17 @@ on:
         description: "Nombre d'analyses à lancer (0 = calendriers seuls)"
         default: "3"
 
-# Analyses quotidiennes. Une seule, à dessein : trois crédits par jour
-# laissent près de deux mois d'autonomie, contre dix-huit jours à trois
-# analyses — de quoi tenir jusqu'à la remise à zéro du quota tout en gardant
-# une marge pour les analyses lancées à la main.
+# Analyses quotidiennes. Trois, soit neuf crédits par jour.
 #
-# Ce n'est pas une perte de contenu : les analyses s'accumulent dans le
-# journal, elles ne se remplacent pas. Le déclenchement manuel permet par
-# ailleurs d'en demander davantage pour une exécution donnée.
+# À surveiller : avec 500 crédits mensuels, ce rythme couvre environ
+# cinquante-cinq jours sur un quota plein, mais seulement dix-huit sur le
+# solde actuel. Si les analyses cessent d'apparaître avant la fin du mois,
+# c'est le quota qui est épuisé — ramener ce nombre à 1 suffit à le voir
+# repartir.
+#
+# Les calendriers, eux, restent gratuits et complets quoi qu'il arrive.
 env:
-  ANALYSES_PAR_JOUR: "1"
+  ANALYSES_PAR_JOUR: "3"
 
 permissions:
   contents: read

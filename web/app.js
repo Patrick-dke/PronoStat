@@ -846,8 +846,11 @@ async function pageMatchs() {
 async function pageProfil() {
   /* Sans service connecté mais avec des données publiées, le profil décrit
      ce que l'application sait faire dans cet état, au lieu de réclamer une
-     clé dont personne n'a besoin ici. */
-  if (!etat.jeton) {
+     clé dont personne n'a besoin ici.
+     La sonde passe avant : quand un service répond vraiment — l'API lancée
+     sur sa propre machine, qui sert aussi cette interface — la clé sert à
+     quelque chose et c'est bien le formulaire qu'il faut montrer. */
+  if (!etat.jeton && !(await serviceDisponible())) {
     const publie = await donneesPubliees();
     if (publie) return profilPublie(publie);
   }
@@ -1029,9 +1032,9 @@ document.getElementById("btn-nouvelle").onclick = () => aller("nouvelle");
    enverrait l'utilisateur vers un écran de connexion inutile, puis vers une
    erreur — c'est exactement ce qui se produisait. */
 (async () => {
-  if (!etat.jeton && (await donneesPubliees())) {
-    aller("accueil");
-    return;
-  }
-  aller(etat.jeton ? "accueil" : "profil");
+  if (etat.jeton) { aller("accueil"); return; }
+  /* Un service répond : la clé ouvre quelque chose, le formulaire a un sens. */
+  if (await serviceDisponible()) { aller("profil"); return; }
+  /* Aucun service, mais des données publiées : rien à demander, on affiche. */
+  aller((await donneesPubliees()) ? "accueil" : "profil");
 })();

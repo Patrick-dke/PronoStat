@@ -376,7 +376,11 @@ class TestKeyRefresh:
     Sans relecture, l'application tourne sans clé alors qu'elle en a une."""
 
     def test_a_key_added_after_startup_is_detected(self, monkeypatch):
-        monkeypatch.delenv("ODDS_API_KEY", raising=False)
+        # L'empreinte agrège tous les secrets, pas seulement celui des cotes.
+        # N'en effacer qu'un laissait le test dépendre de la machine : il
+        # passait ici et échouait sur un poste où Firebase est configuré.
+        for nom in ("ODDS_API_KEY", "RAPIDAPI_KEY", "FIREBASE_SERVICE_ACCOUNT"):
+            monkeypatch.delenv(nom, raising=False)
         monkeypatch.setattr(cfg, "KEYS", cfg.ApiKeys(odds_api="", thesportsdb="3"))
         assert cfg.keys_fingerprint() == "aucune"
 

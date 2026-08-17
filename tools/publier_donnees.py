@@ -117,7 +117,19 @@ def analyser(hub: DataHub, affiches: list[dict]) -> None:
 
 
 def historique() -> list[dict]:
-    """Analyses archivées, la plus récente d'abord."""
+    """Analyses archivées, la plus récente d'abord.
+
+    Lève si le journal n'a pas pu être lu. Une lecture ratée renvoie une liste
+    vide, indiscernable d'un journal réellement vide — et publier cette
+    liste-là remplacerait toutes les analyses de l'application par rien.
+    """
+    journal = PredictionLedger()
+    entrees = journal.all()
+    if not journal.lecture_fiable:
+        raise RuntimeError(
+            "Journal des analyses illisible : publication annulée. "
+            "Le fichier data.json existant reste en place."
+        )
     return [
         {
             "analysis_id": e.id, "created_at": e.created_at,
@@ -129,12 +141,19 @@ def historique() -> list[dict]:
             "resolved": e.resolved, "hit": e.hit,
             "actual_home": e.actual_home, "actual_away": e.actual_away,
         }
-        for e in reversed(PredictionLedger().all())
+        for e in reversed(entrees)
     ]
 
 
 def main() -> None:
-    logging.disable(logging.WARNING)
+    # On tait le bavardage des sources — une compétition sans calendrier au
+    # mois d'août n'est pas une anomalie — mais surtout pas les avertissements
+    # du stockage : ce sont eux qui disent pourquoi un journal est illisible.
+    # `logging.disable()` ne le permettrait pas, il coupe tout sans distinction.
+    logging.basicConfig(level=logging.WARNING, format="  %(message)s")
+    logging.getLogger("pronostat").setLevel(logging.ERROR)
+    logging.getLogger("pronostat.storage").setLevel(logging.WARNING)
+
     hub = DataHub()
 
     print("Calendriers")
@@ -144,7 +163,14 @@ def main() -> None:
         print("\nAnalyses")
         analyser(hub, donnees["fixtures"])
 
-    donnees["analyses"] = historique()
+    try:
+        donnees["analyses"] = historique()
+    except RuntimeError as exc:
+        # Sortie en erreur, volontairement : en intégration continue, l'étape
+        # de déploiement qui suit ne doit pas s'exécuter avec un fichier
+        # amputé de tout son historique.
+        raise SystemExit(f"\n{exc}") from exc
+
     donnees["generated_at"] = datetime.now(UTC).isoformat(timespec="seconds")
     donnees["model_version"] = cfg.MODEL_VERSION
 

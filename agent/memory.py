@@ -124,6 +124,27 @@ class PredictionLedger:
     def _load(self) -> list[dict]:
         return self._store.load()
 
+    @property
+    def lecture_fiable(self) -> bool:
+        """La dernière lecture reflète-t-elle vraiment l'état du journal ?"""
+        return getattr(self._store, "lecture_fiable", True)
+
+    def _load_pour_ecriture(self) -> list[dict]:
+        """Lecture destinée à être réécrite ensuite.
+
+        Le journal s'enregistre en réécrivant le document entier. Repartir
+        d'une lecture qui a échoué reviendrait donc à effacer tout ce qu'elle
+        n'a pas su lire : mieux vaut perdre l'écriture en cours que
+        l'historique accumulé.
+        """
+        rows = self._store.load()
+        if not self.lecture_fiable:
+            raise storage.JournalIndisponible(
+                f"Journal illisible ({self._store.label}) : écriture annulée "
+                "pour ne pas écraser l'historique."
+            )
+        return rows
+
     def _save(self, rows: list[dict]) -> None:
         self._store.save(rows)
 
@@ -148,7 +169,7 @@ class PredictionLedger:
             data_timestamp=_oldest_data(prediction),
         )
         with self._lock:
-            rows = self._load()
+            rows = self._load_pour_ecriture()
             # Une nouvelle analyse du même match remplace la précédente.
             rows = [
                 r for r in rows
@@ -175,7 +196,7 @@ class PredictionLedger:
         if not retenus:
             return False
         with self._lock:
-            rows = self._load()
+            rows = self._load_pour_ecriture()
             touche = False
             for row in rows:
                 if row.get("id") == entry_id:
@@ -188,7 +209,7 @@ class PredictionLedger:
     def resolve(self, entry_id: str, home_goals: int, away_goals: int) -> bool:
         """Renseigne le résultat réel et détermine si le pronostic est passé."""
         with self._lock:
-            rows = self._load()
+            rows = self._load_pour_ecriture()
             touched = False
             for row in rows:
                 if row.get("id") != entry_id or row.get("hit") is not None:

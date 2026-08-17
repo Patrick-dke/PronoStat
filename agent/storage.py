@@ -36,8 +36,25 @@ FIRESTORE_MAX_ENTRIES = 500
 _SCOPES = ["https://www.googleapis.com/auth/datastore"]
 
 
+class JournalIndisponible(RuntimeError):
+    """La dernière lecture a échoué : son résultat ne dit rien du journal réel.
+
+    Distinguer « vide » de « illisible » n'est pas un raffinement. Le journal
+    s'écrit en lisant, modifiant, puis réécrivant le document entier : une
+    lecture ratée prise pour un journal vide fait réécrire ce document avec la
+    seule entrée nouvelle, et efface tout l'historique. De même, publier une
+    liste vide remplacerait les analyses de l'application par rien du tout.
+    """
+
+
 class LedgerStore(Protocol):
-    """Contrat minimal : charger et enregistrer une liste de lignes."""
+    """Contrat minimal : charger et enregistrer une liste de lignes.
+
+    `lecture_fiable` vaut False quand le dernier `load()` a renvoyé une liste
+    vide faute d'avoir pu lire, et non parce que le journal l'est.
+    """
+
+    lecture_fiable: bool
 
     def load(self) -> list[dict]: ...
     def save(self, rows: list[dict]) -> None: ...
@@ -51,18 +68,27 @@ class LocalFileStore:
     def __init__(self, path: str, limit: int = 2000):
         self.path = str(path)
         self.limit = limit
+        self.lecture_fiable = True
 
     @property
     def label(self) -> str:
         return "fichier local"
 
     def load(self) -> list[dict]:
+        self.lecture_fiable = True
+        if not os.path.exists(self.path):
+            return []                    # premier démarrage : vide, et c'est vrai
         try:
             with open(self.path, "r", encoding="utf-8") as fh:
                 data = json.load(fh)
-            return data if isinstance(data, list) else []
-        except (OSError, json.JSONDecodeError):
+        except (OSError, json.JSONDecodeError) as exc:
+            # Le fichier est là mais illisible : disque occupé, écriture
+            # concurrente, contenu tronqué. Le journal n'est pas vide pour
+            # autant, et le réécrire à partir de rien le perdrait.
+            self.lecture_fiable = False
+            log.warning("Journal local illisible (%s)", type(exc).__name__)
             return []
+        return data if isinstance(data, list) else []
 
     def save(self, rows: list[dict]) -> None:
         tmp = f"{self.path}.tmp"
@@ -93,6 +119,7 @@ class FirestoreStore:
         self.document = document
         self.limit = limit
         self._lock = threading.Lock()
+        self.lecture_fiable = True
 
     @property
     def label(self) -> str:
@@ -115,14 +142,19 @@ class FirestoreStore:
     def load(self) -> list[dict]:
         import requests
 
+        self.lecture_fiable = True
         try:
             resp = requests.get(self._url, headers=self._headers(), timeout=15)
         except Exception as exc:
-            log.warning("Firestore illisible (%s) — journal considéré vide", type(exc).__name__)
+            # Coupure réseau, jeton non renouvelable, délai dépassé. Une
+            # seconde d'indisponibilité ne doit pas valoir « journal vide ».
+            self.lecture_fiable = False
+            log.warning("Firestore illisible (%s)", type(exc).__name__)
             return []
         if resp.status_code == 404:
             return []                    # document pas encore créé : normal
         if resp.status_code != 200:
+            self.lecture_fiable = False
             log.warning("Firestore a répondu %s à la lecture", resp.status_code)
             return []
         champ = ((resp.json() or {}).get("fields") or {}).get("entries") or {}
@@ -130,8 +162,13 @@ class FirestoreStore:
         try:
             data = json.loads(brut)
         except json.JSONDecodeError:
+            self.lecture_fiable = False
+            log.warning("Firestore a renvoyé un journal illisible")
             return []
-        return data if isinstance(data, list) else []
+        if not isinstance(data, list):
+            self.lecture_fiable = False
+            return []
+        return data
 
     def save(self, rows: list[dict]) -> None:
         import requests

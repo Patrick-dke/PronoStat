@@ -166,3 +166,77 @@ class TestFallbackReason:
         assert raison, "un compte de service refusé doit être expliqué"
         assert secret not in raison
         assert secret[:10] not in raison
+
+
+class TestLectureFiable:
+    """Distinguer « journal vide » de « journal illisible ».
+
+    Le journal s'enregistre en réécrivant le document entier. Confondre les
+    deux fait repartir d'une liste vide, puis écrase l'historique avec la
+    seule entrée nouvelle — une seconde de réseau coupé suffisait.
+    """
+
+    def test_missing_file_is_genuinely_empty(self, tmp_path):
+        store = storage.LocalFileStore(str(tmp_path / "jamais-cree.json"))
+        assert store.load() == []
+        assert store.lecture_fiable, "un premier démarrage n'est pas une panne"
+
+    def test_unreadable_file_is_not_empty(self, tmp_path):
+        chemin = tmp_path / "l.json"
+        chemin.write_text("ceci n'est pas du json", encoding="utf-8")
+        store = storage.LocalFileStore(str(chemin))
+        assert store.load() == []
+        assert not store.lecture_fiable
+
+    def test_a_failed_read_blocks_the_write(self):
+        """Le cas qui détruisait l'historique : lecture ratée, puis écriture."""
+        journal = PredictionLedger(store=_StorePanne())
+        with pytest.raises(storage.JournalIndisponible):
+            journal.record(_Decision(), _Prediction(), "Test")
+        assert journal._store.ecrit is None, "rien ne doit être écrit"
+
+    def test_a_failed_read_blocks_resolve_and_annotate(self):
+        journal = PredictionLedger(store=_StorePanne())
+        with pytest.raises(storage.JournalIndisponible):
+            journal.resolve("un-id", 1, 0)
+        with pytest.raises(storage.JournalIndisponible):
+            journal.annotate("un-id", window="J-1")
+
+    def test_a_healthy_read_still_writes(self, tmp_path):
+        journal = PredictionLedger(path=str(tmp_path / "l.json"))
+        journal.record(_Decision(), _Prediction(), "Test")
+        assert len(journal.all()) == 1
+
+
+class _StorePanne:
+    """Stockage dont la lecture échoue — Firestore injoignable, disque occupé."""
+
+    label = "stockage en panne"
+
+    def __init__(self):
+        self.lecture_fiable = True
+        self.ecrit = None
+
+    def load(self) -> list[dict]:
+        self.lecture_fiable = False
+        return []
+
+    def save(self, rows) -> None:
+        self.ecrit = rows
+
+
+class _Prediction:
+    sport = "football"
+    home = "Alpha"
+    away = "Beta"
+    outcome_probs: dict[str, float] = {}
+    provenances: list = []
+    main_pick = type("_Pick", (), {"key": "h2h_home"})()
+
+
+class _Decision:
+    recommendation = "Alpha"
+    probability = 0.6
+    confidence = 7.0
+    odds = 1.8
+    fingerprint = "abc"
